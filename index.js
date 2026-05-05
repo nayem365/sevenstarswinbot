@@ -1,11 +1,11 @@
 // ============================================
-// index.js - COMPLETE TELEGRAM BOT (ALL FLOWS)
+// index.js - COMPLETE TELEGRAM BOT (MongoDB)
 // ============================================
 
 require('dotenv').config();
 const express = require('express');
 const { Telegraf, Markup } = require('telegraf');
-const { Pool } = require('pg');
+const mongoose = require('mongoose');
 const fs = require('fs').promises;
 const path = require('path');
 const sharp = require('sharp');
@@ -13,146 +13,97 @@ const sharp = require('sharp');
 // ==================== CONFIGURATION ====================
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_CHAT_IDS = process.env.ADMIN_CHAT_IDS ? process.env.ADMIN_CHAT_IDS.split(',').map(id => id.trim()) : [];
-const DATABASE_URL = process.env.DATABASE_URL;
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/mobcash_bot';
 const MANAGER_USERNAME = process.env.MANAGER_USERNAME || '@Contact_7starswinpartners';
 const PORT = process.env.PORT || 3000;
 
 console.log('✅ Bot Token:', BOT_TOKEN ? 'Set' : 'Missing');
 console.log('✅ Admin IDs:', ADMIN_CHAT_IDS);
-console.log('✅ Database URL:', DATABASE_URL ? 'Set' : 'Missing');
+console.log('✅ MongoDB URI:', MONGODB_URI ? 'Set' : 'Missing');
 
-// ==================== DATABASE SETUP ====================
-const pool = new Pool({
-    connectionString: DATABASE_URL,
-    ssl: DATABASE_URL ? { rejectUnauthorized: false } : false,
-    max: 10,
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 10000,
+// ==================== MONGODB SCHEMAS ====================
+const userSchema = new mongoose.Schema({
+    userId: { type: String, required: true, unique: true },
+    name: String,
+    username: String,
+    phone: String,
+    language: { type: String, default: 'en' },
+    registeredAt: { type: Date, default: Date.now },
+    lastActive: { type: Date, default: Date.now }
 });
 
-async function initDatabase() {
-    const client = await pool.connect();
+const submissionSchema = new mongoose.Schema({
+    userId: { type: String, required: true },
+    type: { type: String, required: true },
+    requestNumber: Number,
+    data: mongoose.Schema.Types.Mixed,
+    status: { type: String, default: 'pending' },
+    createdAt: { type: Date, default: Date.now }
+});
+
+const broadcastSchema = new mongoose.Schema({
+    adminId: String,
+    message: String,
+    successCount: Number,
+    failCount: Number,
+    createdAt: { type: Date, default: Date.now }
+});
+
+const User = mongoose.model('User', userSchema);
+const Submission = mongoose.model('Submission', submissionSchema);
+const Broadcast = mongoose.model('Broadcast', broadcastSchema);
+
+// ==================== DATABASE FUNCTIONS ====================
+async function connectDB() {
     try {
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS users (
-                user_id BIGINT PRIMARY KEY,
-                name VARCHAR(255),
-                username VARCHAR(255),
-                phone VARCHAR(50),
-                language VARCHAR(10) DEFAULT 'en',
-                registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        `);
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS submissions (
-                id SERIAL PRIMARY KEY,
-                user_id BIGINT NOT NULL,
-                type VARCHAR(50) NOT NULL,
-                request_number INTEGER,
-                data JSONB NOT NULL,
-                status VARCHAR(50) DEFAULT 'pending',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        `);
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS broadcasts (
-                id SERIAL PRIMARY KEY,
-                admin_id BIGINT NOT NULL,
-                message TEXT NOT NULL,
-                success_count INTEGER DEFAULT 0,
-                fail_count INTEGER DEFAULT 0,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        `);
-        console.log('✅ Database tables ready');
-    } finally {
-        client.release();
+        await mongoose.connect(MONGODB_URI);
+        console.log('✅ MongoDB connected');
+    } catch (error) {
+        console.error('❌ MongoDB connection error:', error);
+        throw error;
     }
 }
 
 async function getUser(userId) {
-    const client = await pool.connect();
-    try {
-        const res = await client.query('SELECT * FROM users WHERE user_id = $1', [userId.toString()]);
-        return res.rows[0] || null;
-    } finally {
-        client.release();
-    }
+    return await User.findOne({ userId: userId.toString() }).lean();
 }
 
 async function saveUser(userId, data) {
-    const client = await pool.connect();
-    try {
-        const existing = await client.query('SELECT * FROM users WHERE user_id = $1', [userId.toString()]);
-        if (existing.rows.length > 0) {
-            await client.query(
-                `UPDATE users SET name = COALESCE($1, name), username = COALESCE($2, username),
-                 phone = COALESCE($3, phone), language = COALESCE($4, language), last_active = CURRENT_TIMESTAMP
-                 WHERE user_id = $5`,
-                [data.name, data.username, data.phone, data.language, userId.toString()]
-            );
-        } else {
-            await client.query(
-                `INSERT INTO users (user_id, name, username, phone, language) VALUES ($1, $2, $3, $4, $5)`,
-                [userId.toString(), data.name, data.username, data.phone, data.language || 'en']
-            );
-        }
-    } finally {
-        client.release();
-    }
+    return await User.findOneAndUpdate(
+        { userId: userId.toString() },
+        { ...data, lastActive: new Date() },
+        { upsert: true, new: true }
+    );
 }
 
 async function getAllUsers() {
-    const client = await pool.connect();
-    try {
-        const res = await client.query('SELECT * FROM users');
-        return res.rows;
-    } finally {
-        client.release();
-    }
+    return await User.find({}).lean();
 }
 
 async function saveSubmission(data) {
-    const client = await pool.connect();
-    try {
-        await client.query(
-            `INSERT INTO submissions (user_id, type, request_number, data, status) VALUES ($1, $2, $3, $4, $5)`,
-            [data.userId.toString(), data.type, data.requestNumber || null, JSON.stringify(data.data), data.status || 'pending']
-        );
-    } finally {
-        client.release();
-    }
+    const submission = new Submission(data);
+    return await submission.save();
 }
 
 async function getSubmissions(filter = {}) {
-    const client = await pool.connect();
-    try {
-        let query = 'SELECT * FROM submissions WHERE 1=1';
-        const values = [];
-        let i = 1;
-        if (filter.type) { query += ` AND type = $${i}`; values.push(filter.type); i++; }
-        if (filter.status) { query += ` AND status = $${i}`; values.push(filter.status); i++; }
-        if (filter.userId) { query += ` AND user_id = $${i}`; values.push(filter.userId.toString()); i++; }
-        query += ' ORDER BY created_at DESC LIMIT 50';
-        const res = await client.query(query, values);
-        return res.rows;
-    } finally {
-        client.release();
-    }
+    const query = {};
+    if (filter.type) query.type = filter.type;
+    if (filter.status) query.status = filter.status;
+    if (filter.userId) query.userId = filter.userId.toString();
+    return await Submission.find(query).sort({ createdAt: -1 }).limit(50).lean();
 }
 
 async function updateSubmissionStatus(requestNumber, status) {
-    const client = await pool.connect();
-    try {
-        await client.query('UPDATE submissions SET status = $1 WHERE request_number = $2', [status, requestNumber]);
-    } finally {
-        client.release();
-    }
+    return await Submission.findOneAndUpdate(
+        { requestNumber: parseInt(requestNumber) },
+        { status: status },
+        { new: true }
+    );
 }
 
-async function closePool() {
-    await pool.end();
+async function saveBroadcast(data) {
+    const broadcast = new Broadcast(data);
+    return await broadcast.save();
 }
 
 // ==================== HELPERS ====================
@@ -691,7 +642,7 @@ async function adminBroadcast(ctx, message) {
     await ctx.reply(`📢 Broadcasting to ${users.length} users...`);
     for (const user of users) {
         try {
-            await bot.telegram.sendMessage(user.user_id, message);
+            await bot.telegram.sendMessage(user.userId, message);
             sent++;
         } catch (e) {}
     }
@@ -701,8 +652,8 @@ async function adminBroadcast(ctx, message) {
 
 async function adminStats(ctx) {
     const users = await getAllUsers();
-    const deposits = await getSubmissions({ type: 'player', 'data.issueType': 'Deposit' });
-    const withdrawals = await getSubmissions({ type: 'player', 'data.issueType': 'Withdrawal' });
+    const deposits = await getSubmissions({ type: 'player', data: { issueType: 'Deposit' } });
+    const withdrawals = await getSubmissions({ type: 'player', data: { issueType: 'Withdrawal' } });
     const agents = await getSubmissions({ type: 'agent_response' });
     await ctx.editMessageText(
         `📊 *Statistics*\n\n` +
@@ -715,31 +666,31 @@ async function adminStats(ctx) {
 }
 
 async function adminListIssues(ctx, type) {
-    const subs = await getSubmissions({ type: 'player', 'data.issueType': type });
+    const subs = await getSubmissions({ type: 'player', data: { issueType: type } });
     if (!subs.length) return ctx.editMessageText(`No ${type} issues.`);
     let msg = `*${type} Issues*\n\n`;
     const keyboard = [];
     for (const sub of subs.slice(0, 10)) {
-        msg += `#${sub.request_number}\n`;
-        keyboard.push([Markup.button.callback(`View #${sub.request_number}`, `admin_view_${sub.request_number}`)]);
+        msg += `#${sub.requestNumber}\n`;
+        keyboard.push([Markup.button.callback(`View #${sub.requestNumber}`, `admin_view_${sub.requestNumber}`)]);
     }
     keyboard.push([Markup.button.callback('🔙 Back', 'admin_back')]);
     await ctx.editMessageText(msg, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } });
 }
 
 async function adminViewSubmission(ctx, requestNumber) {
-    const subs = await pool.query('SELECT * FROM submissions WHERE request_number = $1', [requestNumber]);
-    if (!subs.rows.length) return;
-    const sub = subs.rows[0];
+    const subs = await Submission.find({ requestNumber: parseInt(requestNumber) }).lean();
+    if (!subs.length) return;
+    const sub = subs[0];
     let details = `📋 *Request #${requestNumber}*\n\n`;
-    const data = typeof sub.data === 'string' ? JSON.parse(sub.data) : sub.data;
+    const data = sub.data;
     for (const [k, v] of Object.entries(data)) {
         details += `*${escapeMarkdown(k)}:* ${escapeMarkdown(String(v))}\n`;
     }
     details += `\n*Status:* ${sub.status}`;
     const keyboard = Markup.inlineKeyboard([
-        [Markup.button.callback('💬 Reply', `admin_reply_${sub.user_id}_${requestNumber}`)],
-        [Markup.button.callback('✅ Mark Resolved', `admin_resolve_${sub.user_id}_${requestNumber}`)],
+        [Markup.button.callback('💬 Reply', `admin_reply_${sub.userId}_${requestNumber}`)],
+        [Markup.button.callback('✅ Mark Resolved', `admin_resolve_${sub.userId}_${requestNumber}`)],
         [Markup.button.callback('🔙 Back', 'admin_back')],
     ]);
     await ctx.editMessageText(details, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } });
@@ -857,7 +808,7 @@ bot.action('admin_agent', async (ctx) => {
     if (!subs.length) return ctx.editMessageText('No pending agent requests.');
     let msg = '*Agent Requests*\n\n';
     for (const sub of subs) {
-        const data = typeof sub.data === 'string' ? JSON.parse(sub.data) : sub.data;
+        const data = sub.data;
         msg += `${data.country} - ${data.interested ? '✅' : '❌'}\n`;
     }
     await ctx.editMessageText(msg, { parse_mode: 'Markdown' });
@@ -914,7 +865,6 @@ bot.on('text', async (ctx) => {
         await generateBanners(ctx, text.toUpperCase());
         clearSession(userId);
     } else {
-        // Echo for debugging – remove later
         await ctx.reply(`You said: ${text}`);
     }
 });
@@ -945,7 +895,7 @@ bot.catch((err, ctx) => {
 (async () => {
     try {
         console.log('🚀 Initializing bot...');
-        await initDatabase();
+        await connectDB();
         await ensureFolder('./temp');
         await bot.telegram.deleteWebhook();
         await bot.launch();
@@ -956,5 +906,5 @@ bot.catch((err, ctx) => {
     }
 })();
 
-process.once('SIGINT', async () => { await bot.stop('SIGINT'); await closePool(); process.exit(0); });
-process.once('SIGTERM', async () => { await bot.stop('SIGTERM'); await closePool(); process.exit(0); });
+process.once('SIGINT', async () => { await bot.stop('SIGINT'); await mongoose.disconnect(); process.exit(0); });
+process.once('SIGTERM', async () => { await bot.stop('SIGTERM'); await mongoose.disconnect(); process.exit(0); });
