@@ -1,5 +1,5 @@
 // ============================================
-// index.js - COMPLETE BOT (DATE PICKER, TIME, PHOTO, PREVIEW, USER REPLY, ADMIN REPLY)
+// index.js - COMPLETE BOT (ALL FEATURES WORKING)
 // ============================================
 
 require('dotenv').config();
@@ -33,7 +33,8 @@ const submissionSchema = new mongoose.Schema({
     requestNumber: Number,
     data: mongoose.Schema.Types.Mixed,
     status: { type: String, default: 'pending' },
-    createdAt: { type: Date, default: Date.now }
+    createdAt: { type: Date, default: Date.now },
+    resolvedAt: Date
 });
 
 const conversationSchema = new mongoose.Schema({
@@ -41,7 +42,7 @@ const conversationSchema = new mongoose.Schema({
     userId: { type: String, required: true },
     adminId: String,
     messages: [{
-        role: String, // 'admin' or 'user'
+        role: String,
         message: String,
         timestamp: { type: Date, default: Date.now }
     }],
@@ -92,9 +93,13 @@ async function getSubmissions(filter = {}) {
 }
 
 async function updateRequestStatus(requestNumber, status) {
+    const updateData = { status: status };
+    if (status === 'resolved') {
+        updateData.resolvedAt = new Date();
+    }
     return await Submission.findOneAndUpdate(
         { requestNumber: parseInt(requestNumber) },
-        { status: status },
+        updateData,
         { new: true }
     );
 }
@@ -142,7 +147,7 @@ async function safeAnswer(ctx) {
 
 // ==================== EXPRESS SERVER ====================
 const app = express();
-app.get('/', (req, res) => res.send('Bot is running!'));
+app.get('/', (req, res) => res.send('✨ Bot is running! ✨'));
 app.listen(PORT, '0.0.0.0', () => console.log(`✅ Health check on port ${PORT}`));
 
 // ==================== BOT SETUP ====================
@@ -160,17 +165,17 @@ async function showMainMenu(ctx) {
     
     if (isAdmin) {
         const keyboard = Markup.inlineKeyboard([
-            [Markup.button.callback('👤 Player Support', 'menu_player')],
+            [Markup.button.callback('🎮 Player Support', 'menu_player')],
             [Markup.button.callback('📢 Broadcast', 'admin_broadcast')],
-            [Markup.button.callback('📊 Stats', 'admin_stats')],
-            [Markup.button.callback('📋 Pending', 'admin_pending')],
+            [Markup.button.callback('📊 Statistics', 'admin_stats')],
+            [Markup.button.callback('📋 Pending Requests', 'admin_pending')],
         ]);
-        await ctx.reply(`👑 *Admin Panel*\n\nWelcome ${user?.name || 'Admin'}!`, { parse_mode: 'Markdown', ...keyboard });
+        await ctx.reply(`👑 *ADMIN PANEL*\n\nWelcome ${user?.name || 'Admin'}! ✨`, { parse_mode: 'Markdown', ...keyboard });
     } else {
         const keyboard = Markup.inlineKeyboard([
-            [Markup.button.callback('👤 Player Support', 'menu_player')],
+            [Markup.button.callback('🎮 Create Support Ticket', 'menu_player')],
         ]);
-        await ctx.reply(`🏠 *Main Menu*\n\nWelcome ${user?.name || 'User'}!`, { parse_mode: 'Markdown', ...keyboard });
+        await ctx.reply(`🏠 *MAIN MENU*\n\nWelcome ${user?.name || 'User'}! ✨\n\nCreate a support ticket for any issue.`, { parse_mode: 'Markdown', ...keyboard });
     }
 }
 
@@ -190,7 +195,8 @@ bot.start(async (ctx) => {
         await showMainMenu(ctx);
     } else {
         await ctx.reply(
-            `👋 *Welcome!*\n\nPlease share your phone number:`,
+            `🌟 *WELCOME TO 7STARSWIN* 🌟\n\n` +
+            `Please share your phone number to continue:`,
             {
                 parse_mode: 'Markdown',
                 reply_markup: {
@@ -209,7 +215,7 @@ bot.on('contact', async (ctx) => {
     const contact = ctx.message.contact;
     
     if (contact.user_id !== userId) {
-        return ctx.reply('⚠️ Share your own number.');
+        return ctx.reply('⚠️ Please share your own number.');
     }
     
     await saveUser(userId, {
@@ -220,11 +226,11 @@ bot.on('contact', async (ctx) => {
         language: 'en',
     });
     
-    await ctx.reply('✅ Phone verified!', { reply_markup: { remove_keyboard: true } });
+    await ctx.reply('✅ *Phone Verified!* ✨\n\nYou can now create support tickets.', { parse_mode: 'Markdown', reply_markup: { remove_keyboard: true } });
     await showMainMenu(ctx);
 });
 
-// ==================== PLAYER FLOW ====================
+// ==================== PLAYER FLOW - COUNTRY ====================
 bot.action('menu_player', async (ctx) => {
     await safeAnswer(ctx);
     clearState(ctx.from.id);
@@ -234,7 +240,7 @@ bot.action('menu_player', async (ctx) => {
         [Markup.button.callback('🇮🇳 India', 'country_in')],
         [Markup.button.callback('🔙 Back', 'back_to_main')],
     ]);
-    await ctx.reply('📍 *Select your country:*', { parse_mode: 'Markdown', ...keyboard });
+    await ctx.reply('📍 *SELECT YOUR COUNTRY*', { parse_mode: 'Markdown', ...keyboard });
 });
 
 // ==================== PAYMENT METHODS ====================
@@ -242,23 +248,23 @@ bot.action('country_bd', async (ctx) => {
     await safeAnswer(ctx);
     userStates.set(ctx.from.id, { country: 'Bangladesh', step: 'payment' });
     const keyboard = Markup.inlineKeyboard([
-        [Markup.button.callback('bKash', 'pay_bkash'), Markup.button.callback('Nagad', 'pay_nagad')],
-        [Markup.button.callback('Rocket', 'pay_rocket'), Markup.button.callback('Upay', 'pay_upay')],
-        [Markup.button.callback('MoneyGo', 'pay_moneygo'), Markup.button.callback('Binance', 'pay_binance')],
+        [Markup.button.callback('💳 bKash', 'pay_bkash'), Markup.button.callback('💳 Nagad', 'pay_nagad')],
+        [Markup.button.callback('💳 Rocket', 'pay_rocket'), Markup.button.callback('💳 Upay', 'pay_upay')],
+        [Markup.button.callback('💳 MoneyGo', 'pay_moneygo'), Markup.button.callback('💳 Binance', 'pay_binance')],
         [Markup.button.callback('🔙 Back', 'menu_player')],
     ]);
-    await ctx.reply('💳 *Select payment method:*', { parse_mode: 'Markdown', ...keyboard });
+    await ctx.reply('💳 *SELECT PAYMENT METHOD*', { parse_mode: 'Markdown', ...keyboard });
 });
 
 bot.action('country_in', async (ctx) => {
     await safeAnswer(ctx);
     userStates.set(ctx.from.id, { country: 'India', step: 'payment' });
     const keyboard = Markup.inlineKeyboard([
-        [Markup.button.callback('PhonePe', 'pay_phonepe'), Markup.button.callback('PayTM', 'pay_paytm')],
-        [Markup.button.callback('Google Pay', 'pay_gpay'), Markup.button.callback('Amazon Pay', 'pay_amazon')],
+        [Markup.button.callback('💳 PhonePe', 'pay_phonepe'), Markup.button.callback('💳 PayTM', 'pay_paytm')],
+        [Markup.button.callback('💳 Google Pay', 'pay_gpay'), Markup.button.callback('💳 Amazon Pay', 'pay_amazon')],
         [Markup.button.callback('🔙 Back', 'menu_player')],
     ]);
-    await ctx.reply('💳 *Select payment method:*', { parse_mode: 'Markdown', ...keyboard });
+    await ctx.reply('💳 *SELECT PAYMENT METHOD*', { parse_mode: 'Markdown', ...keyboard });
 });
 
 const paymentMap = {
@@ -276,11 +282,11 @@ for (const [action, method] of Object.entries(paymentMap)) {
         userStates.set(ctx.from.id, state);
         
         const keyboard = Markup.inlineKeyboard([
-            [Markup.button.callback('💰 Deposit', 'issue_deposit')],
-            [Markup.button.callback('💸 Withdrawal', 'issue_withdrawal')],
+            [Markup.button.callback('💰 Deposit Issue', 'issue_deposit')],
+            [Markup.button.callback('💸 Withdrawal Issue', 'issue_withdrawal')],
             [Markup.button.callback('🔙 Back', `country_${state.country === 'Bangladesh' ? 'bd' : 'in'}`)],
         ]);
-        await ctx.reply(`📋 *Select issue type for ${method}:*`, { parse_mode: 'Markdown', ...keyboard });
+        await ctx.reply(`📋 *SELECT ISSUE TYPE FOR ${method}*`, { parse_mode: 'Markdown', ...keyboard });
     });
 }
 
@@ -303,86 +309,71 @@ bot.action('issue_withdrawal', async (ctx) => {
     await ctx.reply('📝 *Enter your Player ID:*', { parse_mode: 'Markdown' });
 });
 
-// ==================== DATE PICKER ====================
-async function showDatePicker(ctx) {
-    const now = new Date();
-    const year = now.getFullYear();
-    const month = now.getMonth();
-    const daysInMonth = new Date(year, month + 1, 0).getDate();
-    const firstDay = new Date(year, month, 1).getDay();
-    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    const monthName = monthNames[month];
-    
-    const keyboard = [];
-    keyboard.push([Markup.button.callback(`📅 ${monthName} ${year}`, 'noop')]);
-    
-    const weekDays = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'];
-    keyboard.push(weekDays.map(d => Markup.button.callback(d, 'noop')));
-    
-    let week = [];
-    for (let i = 0; i < firstDay; i++) week.push(Markup.button.callback(' ', 'noop'));
-    for (let d = 1; d <= daysInMonth; d++) {
-        week.push(Markup.button.callback(d.toString(), `date_${d}`));
-        if (week.length === 7) { keyboard.push(week); week = []; }
-    }
-    if (week.length) keyboard.push(week);
-    
-    keyboard.push([Markup.button.callback('🔙 Back', 'menu_player')]);
-    
-    await ctx.reply('📅 *Select date:*', {
-        parse_mode: 'Markdown',
-        reply_markup: { inline_keyboard: keyboard }
-    });
-}
-
-bot.action(/date_(\d+)/, async (ctx) => {
-    await safeAnswer(ctx);
-    const day = ctx.match[1];
-    const state = userStates.get(ctx.from.id) || {};
-    state.selectedDate = day;
-    state.step = 'time';
-    userStates.set(ctx.from.id, state);
-    
+// ==================== DATE SELECTOR ====================
+async function showDateSelector(ctx) {
     const keyboard = Markup.inlineKeyboard([
-        [Markup.button.callback('🕐 09:00 AM', 'time_09'), Markup.button.callback('🕑 10:00 AM', 'time_10')],
-        [Markup.button.callback('🕒 11:00 AM', 'time_11'), Markup.button.callback('🕓 12:00 PM', 'time_12')],
-        [Markup.button.callback('🕔 01:00 PM', 'time_13'), Markup.button.callback('🕕 02:00 PM', 'time_14')],
-        [Markup.button.callback('🕖 03:00 PM', 'time_15'), Markup.button.callback('🕗 04:00 PM', 'time_16')],
-        [Markup.button.callback('🕘 05:00 PM', 'time_17'), Markup.button.callback('🕙 06:00 PM', 'time_18')],
+        [Markup.button.callback('📅 Today', 'date_today'), Markup.button.callback('📅 Tomorrow', 'date_tomorrow')],
+        [Markup.button.callback('📅 Pick Custom Date', 'date_custom')],
         [Markup.button.callback('🔙 Back', 'menu_player')],
     ]);
-    await ctx.reply(`⏰ *Select time for ${state.selectedDate}:*`, { parse_mode: 'Markdown', ...keyboard });
-});
-
-const timeMap = {
-    time_09: '09:00 AM', time_10: '10:00 AM', time_11: '11:00 AM', time_12: '12:00 PM',
-    time_13: '01:00 PM', time_14: '02:00 PM', time_15: '03:00 PM', time_16: '04:00 PM',
-    time_17: '05:00 PM', time_18: '06:00 PM'
-};
-
-for (const [action, time] of Object.entries(timeMap)) {
-    bot.action(action, async (ctx) => {
-        await safeAnswer(ctx);
-        const state = userStates.get(ctx.from.id) || {};
-        state.selectedTime = time;
-        state.step = 'photo';
-        userStates.set(ctx.from.id, state);
-        
-        const keyboard = Markup.inlineKeyboard([
-            [Markup.button.callback('📸 Send Photo', 'send_photo_prompt')],
-            [Markup.button.callback('⏭️ Skip', 'skip_photo')],
-            [Markup.button.callback('🔙 Back', 'menu_player')],
-        ]);
-        await ctx.reply('📸 *Do you want to send a photo as proof?*\n\nYou can send a photo or skip this step.', { parse_mode: 'Markdown', ...keyboard });
-    });
+    await ctx.reply('📅 *SELECT DATE*\n\nChoose when this issue occurred:', { parse_mode: 'Markdown', ...keyboard });
 }
 
-bot.action('send_photo_prompt', async (ctx) => {
+bot.action('date_today', async (ctx) => {
+    await safeAnswer(ctx);
+    const today = new Date();
+    const dateStr = today.toLocaleDateString();
+    const state = userStates.get(ctx.from.id) || {};
+    state.selectedDate = dateStr;
+    state.step = 'time';
+    userStates.set(ctx.from.id, state);
+    await askTime(ctx);
+});
+
+bot.action('date_tomorrow', async (ctx) => {
+    await safeAnswer(ctx);
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const dateStr = tomorrow.toLocaleDateString();
+    const state = userStates.get(ctx.from.id) || {};
+    state.selectedDate = dateStr;
+    state.step = 'time';
+    userStates.set(ctx.from.id, state);
+    await askTime(ctx);
+});
+
+bot.action('date_custom', async (ctx) => {
+    await safeAnswer(ctx);
+    const state = userStates.get(ctx.from.id) || {};
+    state.step = 'waiting_custom_date';
+    userStates.set(ctx.from.id, state);
+    await ctx.reply('📅 *Enter custom date*\n\nFormat: DD/MM/YYYY\nExample: 15/03/2024', { parse_mode: 'Markdown' });
+});
+
+// ==================== TIME INPUT (TEXT FORMAT) ====================
+async function askTime(ctx) {
+    const keyboard = Markup.inlineKeyboard([
+        [Markup.button.callback('🔙 Back', 'menu_player')],
+    ]);
+    await ctx.reply('⏰ *ENTER TIME*\n\nPlease write the time in text format.\n\nExample: "Around 3:00 PM" or "Morning 10:30 AM"', { parse_mode: 'Markdown', ...keyboard });
+}
+
+// ==================== PHOTO OPTION ====================
+async function askPhoto(ctx) {
+    const keyboard = Markup.inlineKeyboard([
+        [Markup.button.callback('📸 Send Photo', 'send_photo')],
+        [Markup.button.callback('⏭️ Skip Photo', 'skip_photo')],
+        [Markup.button.callback('🔙 Back', 'menu_player')],
+    ]);
+    await ctx.reply('📸 *PHOTO EVIDENCE*\n\nWould you like to attach a photo as proof?\n(Optional)', { parse_mode: 'Markdown', ...keyboard });
+}
+
+bot.action('send_photo', async (ctx) => {
     await safeAnswer(ctx);
     const state = userStates.get(ctx.from.id) || {};
     state.step = 'waiting_photo';
     userStates.set(ctx.from.id, state);
-    await ctx.reply('📸 *Please send your photo now.*', { parse_mode: 'Markdown' });
+    await ctx.reply('📸 *Send your photo now*', { parse_mode: 'Markdown' });
 });
 
 bot.action('skip_photo', async (ctx) => {
@@ -408,7 +399,7 @@ bot.on('photo', async (ctx) => {
         state.photoId = photo.file_id;
         state.step = 'review';
         userStates.set(userId, state);
-        await ctx.reply('📸 *Photo received!*', { parse_mode: 'Markdown' });
+        await ctx.reply('📸 *Photo received!* ✅', { parse_mode: 'Markdown' });
         await showReviewScreen(ctx);
     } else {
         await ctx.reply('📸 *Photo received!*\n\nPlease start a support request first using the Player Support button.', { parse_mode: 'Markdown' });
@@ -429,13 +420,13 @@ async function showReviewScreen(ctx) {
     reviewText += `💳 *Payment:* ${state.paymentMethod}\n`;
     reviewText += `📋 *Issue:* ${state.issueType}\n`;
     reviewText += `🆔 *ID:* ${state.userOrPlayerId}\n`;
-    reviewText += `📅 *Date:* ${state.selectedDate}\n`;
-    reviewText += `⏰ *Time:* ${state.selectedTime}\n`;
-    reviewText += `📸 *Photo:* ${state.photoId ? '✅ Received' : '⏭️ Skipped'}\n`;
+    reviewText += `📅 *Date:* ${state.selectedDate || 'Not set'}\n`;
+    reviewText += `⏰ *Time:* ${state.selectedTime || 'Not set'}\n`;
+    reviewText += `📸 *Photo:* ${state.photoId ? '✅ Attached' : '⏭️ Skipped'}\n`;
     reviewText += `\n✅ *Is all information correct?*`;
     
     const keyboard = Markup.inlineKeyboard([
-        [Markup.button.callback('✅ SUBMIT', 'submit_request')],
+        [Markup.button.callback('✅ SUBMIT TICKET', 'submit_request')],
         [Markup.button.callback('❌ CANCEL', 'cancel_request')],
         [Markup.button.callback('🔙 Edit', 'menu_player')],
     ]);
@@ -465,7 +456,6 @@ bot.action('submit_request', async (ctx) => {
     }
     
     const requestNumber = generateRequestNumber();
-    const fullDateTime = `${state.selectedDate} ${state.selectedTime}`;
     
     await saveSubmission({
         userId: userId.toString(),
@@ -476,7 +466,8 @@ bot.action('submit_request', async (ctx) => {
             issueType: state.issueType,
             paymentMethod: state.paymentMethod,
             userOrPlayerId: state.userOrPlayerId,
-            dateTime: fullDateTime,
+            date: state.selectedDate,
+            time: state.selectedTime,
             photoId: state.photoId,
             userName: user?.name,
             userPhone: user?.phone
@@ -486,15 +477,17 @@ bot.action('submit_request', async (ctx) => {
     
     // Notify admins
     let adminMsg = 
-        `🆕 *NEW REQUEST #${requestNumber}*\n\n` +
+        `🎫 *NEW TICKET #${requestNumber}*\n\n` +
         `👤 *User:* ${user?.name || 'Unknown'}\n` +
         `🆔 *ID:* ${userId}\n` +
         `📍 *Country:* ${state.country}\n` +
         `💳 *Payment:* ${state.paymentMethod}\n` +
         `📋 *Issue:* ${state.issueType}\n` +
         `🆔 *User/Player ID:* ${state.userOrPlayerId}\n` +
-        `📅 *Date/Time:* ${fullDateTime}\n` +
-        `📸 *Photo:* ${state.photoId ? '✅ Yes' : '❌ No'}`;
+        `📅 *Date:* ${state.selectedDate || 'N/A'}\n` +
+        `⏰ *Time:* ${state.selectedTime || 'N/A'}\n` +
+        `📸 *Photo:* ${state.photoId ? '✅ Yes' : '❌ No'}\n\n` +
+        `🟡 *Status: PENDING*`;
     
     const adminKeyboard = Markup.inlineKeyboard([
         [Markup.button.callback('💬 Reply', `admin_reply_${requestNumber}`)],
@@ -521,10 +514,11 @@ bot.action('submit_request', async (ctx) => {
     }
     
     await ctx.reply(
-        `✅ *REQUEST SUBMITTED!*\n\n` +
-        `📋 *Request #:* ${requestNumber}\n\n` +
-        `Our team will review and respond shortly.\n` +
-        `📱 You will be notified when there is a reply.`,
+        `✅ *TICKET CREATED!* 🎫\n\n` +
+        `📋 *Ticket #:* ${requestNumber}\n\n` +
+        `🟡 *Status:* PENDING\n\n` +
+        `Our support team will review your ticket and respond shortly.\n\n` +
+        `📱 *You will be notified when there is a reply.*`,
         { parse_mode: 'Markdown' }
     );
     
@@ -535,17 +529,43 @@ bot.action('submit_request', async (ctx) => {
 bot.action('cancel_request', async (ctx) => {
     await safeAnswer(ctx);
     clearState(ctx.from.id);
-    await ctx.reply('❌ *Request cancelled.*', { parse_mode: 'Markdown' });
+    await ctx.reply('❌ *Ticket cancelled.*', { parse_mode: 'Markdown' });
     await showMainMenu(ctx);
 });
 
-// ==================== TEXT HANDLER FOR USER ID ====================
+// ==================== TEXT HANDLER ====================
 bot.on('text', async (ctx) => {
     const userId = ctx.from.id;
     const state = userStates.get(userId);
     const text = ctx.message.text;
+    const isAdmin = ADMIN_CHAT_IDS.includes(userId.toString());
 
-    // Admin broadcast
+    if (text.startsWith('/')) return;
+
+    // Handle custom date input
+    if (state && state.step === 'waiting_custom_date') {
+        const dateRegex = /^\d{2}\/\d{2}\/\d{4}$/;
+        if (dateRegex.test(text)) {
+            state.selectedDate = text;
+            state.step = 'time';
+            userStates.set(userId, state);
+            await askTime(ctx);
+        } else {
+            await ctx.reply('❌ *Invalid date format*\n\nPlease use DD/MM/YYYY\nExample: 15/03/2024', { parse_mode: 'Markdown' });
+        }
+        return;
+    }
+
+    // Handle time input (text format)
+    if (state && state.step === 'time') {
+        state.selectedTime = text;
+        state.step = 'photo';
+        userStates.set(userId, state);
+        await askPhoto(ctx);
+        return;
+    }
+
+    // Handle admin broadcast
     if (state && state.step === 'admin_broadcast') {
         const users = await getAllUsers();
         let sent = 0;
@@ -561,13 +581,80 @@ bot.on('text', async (ctx) => {
         return;
     }
 
-    // Player flow - waiting for user ID
+    // Handle admin reply to a specific request
+    if (state && state.step === 'admin_reply') {
+        const targetUserId = state.targetUserId;
+        const requestNumber = state.requestNumber;
+        
+        await saveConversationMessage(parseInt(requestNumber), targetUserId, userId, 'admin', text);
+        
+        try {
+            await bot.telegram.sendMessage(targetUserId, 
+                `📬 *ADMIN RESPONSE - TICKET #${requestNumber}*\n\n` +
+                `${text}\n\n` +
+                `━━━━━━━━━━━━━━━━━━━━━\n` +
+                `💬 *You can reply directly to this message*`,
+                { parse_mode: 'Markdown' }
+            );
+            await ctx.reply(`✅ Reply sent to user for ticket #${requestNumber}.`);
+        } catch (error) {
+            await ctx.reply(`❌ Failed to send reply: ${error.message}`);
+        }
+        clearState(userId);
+        return;
+    }
+
+    // Handle USER REPLY to admin
+    if (!isAdmin) {
+        const conversation = await Conversation.findOne({ 
+            userId: userId.toString(), 
+            lastActivity: { $gt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) }
+        }).sort({ lastActivity: -1 });
+        
+        if (conversation) {
+            const request = await getRequestByNumber(conversation.requestNumber);
+            if (request && request.status !== 'resolved') {
+                await saveConversationMessage(conversation.requestNumber, userId, null, 'user', text);
+                
+                const user = await getUser(userId);
+                const adminMsg = 
+                    `💬 *USER REPLY - TICKET #${conversation.requestNumber}*\n\n` +
+                    `👤 *User:* ${user?.name || 'Unknown'}\n` +
+                    `🆔 *User ID:* ${userId}\n` +
+                    `📋 *Ticket #:* ${conversation.requestNumber}\n\n` +
+                    `📝 *Message:*\n${text}`;
+                
+                const adminKeyboard = Markup.inlineKeyboard([
+                    [Markup.button.callback('💬 Reply', `admin_reply_${conversation.requestNumber}`)],
+                    [Markup.button.callback('✅ Resolve', `resolve_${conversation.requestNumber}`)],
+                ]);
+                
+                for (const adminId of ADMIN_CHAT_IDS) {
+                    try {
+                        await bot.telegram.sendMessage(adminId, adminMsg, { 
+                            parse_mode: 'Markdown',
+                            ...adminKeyboard
+                        });
+                    } catch (e) {}
+                }
+                
+                await ctx.reply(`✅ *Your reply has been sent to support.*\n\nWe will get back to you shortly.`, { parse_mode: 'Markdown' });
+                return;
+            }
+        }
+    }
+
+    // Handle player flow - waiting for user ID
     if (state && state.step === 'user_id') {
         state.userOrPlayerId = text;
         state.step = 'date';
         userStates.set(userId, state);
-        await showDatePicker(ctx);
+        await showDateSelector(ctx);
         return;
+    }
+
+    if (!state && !isAdmin) {
+        await ctx.reply(`💬 *Menu*\n\nUse /start to see the main menu.`, { parse_mode: 'Markdown' });
     }
 });
 
@@ -578,14 +665,14 @@ bot.action('admin_pending', async (ctx) => {
     const pending = await getSubmissions({ status: 'pending' });
     
     if (pending.length === 0) {
-        await ctx.reply('📭 *No pending requests.*', { parse_mode: 'Markdown' });
+        await ctx.reply('📭 *No pending tickets.*', { parse_mode: 'Markdown' });
         return;
     }
     
-    let msg = '*📋 PENDING REQUESTS*\n\n';
+    let msg = '*📋 PENDING TICKETS*\n\n';
     const keyboard = [];
     for (const req of pending.slice(0, 10)) {
-        msg += `#${req.requestNumber} - ${req.data?.issueType || 'Unknown'} (${req.data?.paymentMethod || 'N/A'})\n`;
+        msg += `🎫 #${req.requestNumber} - ${req.data?.issueType || 'Unknown'} (${req.data?.paymentMethod || 'N/A'})\n`;
         keyboard.push([Markup.button.callback(`📋 View #${req.requestNumber}`, `view_${req.requestNumber}`)]);
     }
     keyboard.push([Markup.button.callback('🔙 Back', 'back_to_main')]);
@@ -600,20 +687,21 @@ bot.action(/view_(\d+)/, async (ctx) => {
     const request = await getRequestByNumber(requestNumber);
     
     if (!request) {
-        await ctx.reply('❌ Request not found.');
+        await ctx.reply('❌ Ticket not found.');
         return;
     }
     
     const data = request.data;
-    let details = `📋 *REQUEST #${requestNumber}*\n\n`;
-    details += `📌 *Status:* ${request.status === 'pending' ? '⏳ Pending' : '✅ Resolved'}\n`;
+    let details = `🎫 *TICKET #${requestNumber}*\n\n`;
+    details += `📌 *Status:* ${request.status === 'pending' ? '🟡 Pending' : '✅ Resolved'}\n`;
     details += `👤 *User:* ${data?.userName || 'Unknown'}\n`;
     details += `🆔 *User ID:* ${request.userId}\n`;
     details += `📍 *Country:* ${data?.country || 'Unknown'}\n`;
     details += `💳 *Payment:* ${data?.paymentMethod || 'N/A'}\n`;
     details += `📋 *Issue:* ${data?.issueType || 'Unknown'}\n`;
     details += `🆔 *User/Player ID:* ${data?.userOrPlayerId || 'N/A'}\n`;
-    details += `📅 *Date/Time:* ${data?.dateTime || 'N/A'}\n`;
+    details += `📅 *Date:* ${data?.date || 'N/A'}\n`;
+    details += `⏰ *Time:* ${data?.time || 'N/A'}\n`;
     details += `📸 *Photo:* ${data?.photoId ? '✅ Yes' : '❌ No'}\n`;
     details += `📅 *Submitted:* ${formatDate(request.createdAt)}\n\n`;
     details += `💬 *Click below to reply to this user.*`;
@@ -639,7 +727,7 @@ bot.action(/view_(\d+)/, async (ctx) => {
     }
 });
 
-// ==================== ADMIN REPLY TO USER ====================
+// ==================== ADMIN REPLY ====================
 bot.action(/admin_reply_(\d+)/, async (ctx) => {
     if (!ADMIN_CHAT_IDS.includes(ctx.from.id.toString())) return;
     await safeAnswer(ctx);
@@ -647,7 +735,7 @@ bot.action(/admin_reply_(\d+)/, async (ctx) => {
     const request = await getRequestByNumber(parseInt(requestNumber));
     
     if (!request) {
-        await ctx.reply('❌ Request not found.');
+        await ctx.reply('❌ Ticket not found.');
         return;
     }
     
@@ -656,12 +744,8 @@ bot.action(/admin_reply_(\d+)/, async (ctx) => {
         targetUserId: request.userId, 
         requestNumber: requestNumber 
     });
-    await ctx.reply(`✏️ *Reply to Request #${requestNumber}*\n\nType your message below:`, { parse_mode: 'Markdown' });
+    await ctx.reply(`✏️ *REPLY TO TICKET #${requestNumber}*\n\nType your message below:`, { parse_mode: 'Markdown' });
 });
-
-// ==================== TEXT HANDLER FOR ADMIN REPLY ====================
-// This handles the actual message from admin after clicking reply button
-// Add this inside the bot.on('text') handler
 
 // ==================== RESOLVE REQUEST ====================
 bot.action(/resolve_(\d+)/, async (ctx) => {
@@ -671,23 +755,24 @@ bot.action(/resolve_(\d+)/, async (ctx) => {
     const request = await getRequestByNumber(requestNumber);
     
     if (!request) {
-        await ctx.reply('❌ Request not found.');
+        await ctx.reply('❌ Ticket not found.');
         return;
     }
     
     await updateRequestStatus(requestNumber, 'resolved');
     
-    // Notify user
+    // Notify user with beautiful message
     try {
         await bot.telegram.sendMessage(request.userId, 
-            `✅ *REQUEST #${requestNumber} RESOLVED*\n\n` +
+            `✅ *TICKET #${requestNumber} RESOLVED* 🎉\n\n` +
             `Your request has been marked as resolved.\n` +
-            `Thank you for using MobCash!`,
+            `Thank you for using 7starswin! ⭐\n\n` +
+            `🌟 *We appreciate your trust in us!* 🌟`,
             { parse_mode: 'Markdown' }
         );
     } catch (e) {}
     
-    await ctx.reply(`✅ Request #${requestNumber} marked as resolved.`);
+    await ctx.reply(`✅ Ticket #${requestNumber} marked as resolved.`);
 });
 
 // ==================== ADMIN STATS ====================
@@ -698,11 +783,12 @@ bot.action('admin_stats', async (ctx) => {
     const submissions = await getSubmissions();
     const pending = submissions.filter(s => s.status === 'pending');
     await ctx.reply(
-        `📊 *STATISTICS*\n\n` +
-        `👥 Total Users: ${users.length}\n` +
-        `📝 Total Requests: ${submissions.length}\n` +
-        `⏳ Pending: ${pending.length}\n` +
-        `✅ Resolved: ${submissions.length - pending.length}`,
+        `📊 *STATISTICS* 📊\n\n` +
+        `👥 *Total Users:* ${users.length}\n` +
+        `📝 *Total Tickets:* ${submissions.length}\n` +
+        `🟡 *Pending:* ${pending.length}\n` +
+        `✅ *Resolved:* ${submissions.length - pending.length}\n\n` +
+        `✨ *7Starswin Support Team* ✨`,
         { parse_mode: 'Markdown' }
     );
 });
@@ -712,7 +798,7 @@ bot.action('admin_broadcast', async (ctx) => {
     if (!ADMIN_CHAT_IDS.includes(ctx.from.id.toString())) return;
     await safeAnswer(ctx);
     userStates.set(ctx.from.id, { step: 'admin_broadcast' });
-    await ctx.reply('📢 *Enter your broadcast message:*', { parse_mode: 'Markdown' });
+    await ctx.reply('📢 *ENTER BROADCAST MESSAGE*\n\nType your message below:', { parse_mode: 'Markdown' });
 });
 
 // ==================== BACK TO MAIN ====================
@@ -720,117 +806,6 @@ bot.action('back_to_main', async (ctx) => {
     await safeAnswer(ctx);
     clearState(ctx.from.id);
     await showMainMenu(ctx);
-});
-
-// ==================== USER REPLY TO ADMIN (AFTER RECEIVING ADMIN REPLY) ====================
-// This allows users to reply to admin messages
-bot.on('text', async (ctx) => {
-    const userId = ctx.from.id;
-    const state = userStates.get(userId);
-    const text = ctx.message.text;
-    const isAdmin = ADMIN_CHAT_IDS.includes(userId.toString());
-
-    // Skip processing for commands
-    if (text.startsWith('/')) return;
-
-    // Handle admin broadcast
-    if (state && state.step === 'admin_broadcast') {
-        const users = await getAllUsers();
-        let sent = 0;
-        await ctx.reply(`📢 Broadcasting to ${users.length} users...`);
-        for (const user of users) {
-            try {
-                await bot.telegram.sendMessage(user.userId, text);
-                sent++;
-            } catch (e) {}
-        }
-        await ctx.reply(`✅ Broadcast sent to ${sent} users.`);
-        clearState(userId);
-        return;
-    }
-
-    // Handle admin reply to a specific request
-    if (state && state.step === 'admin_reply') {
-        const targetUserId = state.targetUserId;
-        const requestNumber = state.requestNumber;
-        
-        // Save conversation
-        await saveConversationMessage(parseInt(requestNumber), targetUserId, userId, 'admin', text);
-        
-        try {
-            await bot.telegram.sendMessage(targetUserId, 
-                `📬 *ADMIN RESPONSE - REQUEST #${requestNumber}*\n\n` +
-                `${text}\n\n` +
-                `━━━━━━━━━━━━━━━━━━━━━\n` +
-                `💬 *You can reply directly to this message*`,
-                { parse_mode: 'Markdown' }
-            );
-            await ctx.reply(`✅ Reply sent to user for request #${requestNumber}.`);
-        } catch (error) {
-            await ctx.reply(`❌ Failed to send reply: ${error.message}`);
-        }
-        clearState(userId);
-        return;
-    }
-
-    // Handle USER REPLY to admin (when user sends a message after receiving an admin reply)
-    if (!isAdmin) {
-        // Check if this is a reply to a previous admin message
-        // Find any active conversation for this user
-        const conversation = await Conversation.findOne({ 
-            userId: userId.toString(), 
-            lastActivity: { $gt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) } // Last 7 days
-        }).sort({ lastActivity: -1 });
-        
-        if (conversation) {
-            const request = await getRequestByNumber(conversation.requestNumber);
-            if (request && request.status !== 'resolved') {
-                // Save user's reply
-                await saveConversationMessage(conversation.requestNumber, userId, null, 'user', text);
-                
-                // Notify all admins
-                const user = await getUser(userId);
-                const adminMsg = 
-                    `💬 *USER REPLY - REQUEST #${conversation.requestNumber}*\n\n` +
-                    `👤 *User:* ${user?.name || 'Unknown'}\n` +
-                    `🆔 *User ID:* ${userId}\n` +
-                    `📋 *Request #:* ${conversation.requestNumber}\n\n` +
-                    `📝 *Message:*\n${text}`;
-                
-                const adminKeyboard = Markup.inlineKeyboard([
-                    [Markup.button.callback('💬 Reply', `admin_reply_${conversation.requestNumber}`)],
-                    [Markup.button.callback('✅ Resolve', `resolve_${conversation.requestNumber}`)],
-                ]);
-                
-                for (const adminId of ADMIN_CHAT_IDS) {
-                    try {
-                        await bot.telegram.sendMessage(adminId, adminMsg, { 
-                            parse_mode: 'Markdown',
-                            ...adminKeyboard
-                        });
-                    } catch (e) {}
-                }
-                
-                await ctx.reply(`✅ *Your reply has been sent to admin.*\n\nWe will get back to you shortly.`, { parse_mode: 'Markdown' });
-                return;
-            }
-        }
-    }
-
-    // Handle player flow - waiting for user ID
-    if (state && state.step === 'user_id') {
-        state.userOrPlayerId = text;
-        state.step = 'date';
-        userStates.set(userId, state);
-        await showDatePicker(ctx);
-        return;
-    }
-
-    // If no state matches and not a conversation reply, ignore
-    if (!state && !isAdmin) {
-        // Just a friendly reminder
-        await ctx.reply(`💬 *Menu*\n\nUse /start to see the main menu.`, { parse_mode: 'Markdown' });
-    }
 });
 
 // ==================== ERROR HANDLER ====================
