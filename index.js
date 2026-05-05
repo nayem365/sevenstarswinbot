@@ -90,7 +90,12 @@ async function getSubmissions(filter = {}) {
     if (filter.type) query.type = filter.type;
     if (filter.status) query.status = filter.status;
     if (filter.userId) query.userId = filter.userId.toString();
-    return await Submission.find(query).sort({ createdAt: -1 }).limit(50).lean();
+    const results = await Submission.find(query).sort({ createdAt: -1 }).limit(50).lean();
+    // Filter by issueType if needed (since MongoDB doesn't support dot notation in query directly)
+    if (filter.data && filter.data.issueType) {
+        return results.filter(s => s.data && s.data.issueType === filter.data.issueType);
+    }
+    return results;
 }
 
 async function updateSubmissionStatus(requestNumber, status) {
@@ -234,6 +239,23 @@ function clearSession(userId) {
     sessions.delete(userId);
 }
 
+// Helper to safely edit or send new message
+async function safeEditOrSend(ctx, text, extra = {}) {
+    try {
+        if (ctx.callbackQuery && ctx.callbackQuery.message) {
+            await ctx.editMessageText(text, { parse_mode: 'Markdown', ...extra });
+        } else {
+            await ctx.reply(text, { parse_mode: 'Markdown', ...extra });
+        }
+    } catch (error) {
+        if (error.message && error.message.includes("message can't be edited")) {
+            await ctx.reply(text, { parse_mode: 'Markdown', ...extra });
+        } else {
+            throw error;
+        }
+    }
+}
+
 // ==================== MIDDLEWARE ====================
 bot.use(async (ctx, next) => {
     console.log(`📨 ${ctx.updateType} from ${ctx.from?.id} (${ctx.from?.first_name})`);
@@ -251,7 +273,11 @@ async function showMainMenu(ctx) {
         [Markup.button.callback(`🎁 ${t(lang, 'affiliate')}`, 'menu_promo')],
         [Markup.button.callback(`⚙️ ${t(lang, 'settings')}`, 'menu_settings')],
     ]);
-    await ctx.reply(`🏠 ${t(lang, 'main_menu')}\n\n${t(lang, 'welcome_back')} ${user?.name || ''}!`, { parse_mode: 'Markdown', ...keyboard });
+    if (ctx.callbackQuery) {
+        await safeEditOrSend(ctx, `🏠 ${t(lang, 'main_menu')}\n\n${t(lang, 'welcome_back')} ${user?.name || ''}!`, keyboard);
+    } else {
+        await ctx.reply(`🏠 ${t(lang, 'main_menu')}\n\n${t(lang, 'welcome_back')} ${user?.name || ''}!`, { parse_mode: 'Markdown', ...keyboard });
+    }
 }
 
 // ==================== START COMMAND ====================
@@ -319,7 +345,7 @@ async function playerFlow(ctx) {
         [Markup.button.callback(`🇮🇳 ${t(lang, 'india')}`, 'player_in')],
         [Markup.button.callback(t(lang, 'back'), 'back_to_main')],
     ]);
-    await ctx.editMessageText(`👤 *${t(lang, 'player_support')}*\n\n${t(lang, 'select_country')}`, { parse_mode: 'Markdown', ...keyboard });
+    await safeEditOrSend(ctx, `👤 *${t(lang, 'player_support')}*\n\n${t(lang, 'select_country')}`, keyboard);
 }
 
 async function handleCountry(ctx, country) {
@@ -333,7 +359,7 @@ async function handleCountry(ctx, country) {
         [Markup.button.callback(t(lang, 'withdrawal'), 'player_withdrawal')],
         [Markup.button.callback(t(lang, 'back'), 'menu_player')],
     ]);
-    await ctx.editMessageText(`📋 *${t(lang, 'select_issue')}*`, { parse_mode: 'Markdown', ...keyboard });
+    await safeEditOrSend(ctx, `📋 *${t(lang, 'select_issue')}*`, keyboard);
 }
 
 async function handleIssue(ctx, type) {
@@ -356,7 +382,7 @@ async function handleIssue(ctx, type) {
             [Markup.button.callback(t(lang, 'back'), 'menu_player')],
         ]);
     }
-    await ctx.editMessageText(`💳 *Select Payment Method*`, { parse_mode: 'Markdown', ...keyboard });
+    await safeEditOrSend(ctx, `💳 *Select Payment Method*`, keyboard);
 }
 
 async function handlePayment(ctx, payment) {
@@ -364,10 +390,10 @@ async function handlePayment(ctx, payment) {
     session.data.payment = payment;
     if (session.data.issueType === 'Withdrawal') {
         session.state = 'waiting_player_id';
-        await ctx.editMessageText(`📢 *Enter your Player ID:*`, { parse_mode: 'Markdown' });
+        await safeEditOrSend(ctx, `📢 *Enter your Player ID:*`);
     } else {
         session.state = 'waiting_user_id';
-        await ctx.editMessageText(`📢 *Enter your User ID:*`, { parse_mode: 'Markdown' });
+        await safeEditOrSend(ctx, `📢 *Enter your User ID:*`);
     }
 }
 
@@ -396,7 +422,7 @@ async function showDatePicker(ctx, isWithdrawal = false) {
     if (week.length) keyboard.push(week);
     keyboard.push([Markup.button.callback(t(lang, 'back'), 'menu_player')]);
     session.state = 'waiting_date';
-    await ctx.editMessageText(`📅 *${t(lang, 'select_date')}*`, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } });
+    await safeEditOrSend(ctx, `📅 *${t(lang, 'select_date')}*`, { reply_markup: { inline_keyboard: keyboard } });
 }
 
 async function showConfirmation(ctx) {
@@ -417,7 +443,7 @@ async function showConfirmation(ctx) {
         [Markup.button.callback(t(lang, 'submit'), 'confirm_yes')],
         [Markup.button.callback(t(lang, 'restart'), 'confirm_no')],
     ]);
-    await ctx.editMessageText(`📋 *${t(lang, 'confirm')}*\n\n${details}\n${t(lang, 'is_correct')}`, { parse_mode: 'Markdown', ...keyboard });
+    await safeEditOrSend(ctx, `📋 *${t(lang, 'confirm')}*\n\n${details}\n${t(lang, 'is_correct')}`, keyboard);
 }
 
 async function submitRequest(ctx) {
@@ -450,7 +476,7 @@ async function submitRequest(ctx) {
                 }
             } catch (e) {}
         }
-        await ctx.editMessageText(`✅ *${t(lang, 'request_registered')}* #${requestNumber}\n\n${t(lang, 'admin_will_respond')}`, { parse_mode: 'Markdown' });
+        await safeEditOrSend(ctx, `✅ *${t(lang, 'request_registered')}* #${requestNumber}\n\n${t(lang, 'admin_will_respond')}`, {});
         clearSession(userId);
     } catch (error) {
         console.error(error);
@@ -475,7 +501,7 @@ async function agentFlow(ctx) {
         [Markup.button.callback(`🇳🇵 ${t(lang, 'nepal')}`, 'agent_np')],
         [Markup.button.callback(t(lang, 'back'), 'back_to_main')],
     ]);
-    await ctx.editMessageText(`🧑‍💼 *${t(lang, 'agent_registration')}*\n\n${t(lang, 'select_country')}`, { parse_mode: 'Markdown', ...keyboard });
+    await safeEditOrSend(ctx, `🧑‍💼 *${t(lang, 'agent_registration')}*\n\n${t(lang, 'select_country')}`, keyboard);
 }
 
 async function agentDetails(ctx, country) {
@@ -531,7 +557,7 @@ async function promoFlow(ctx) {
         [Markup.button.callback(`🎨 ${t(lang, 'promo_banner')}`, 'promo_banner')],
         [Markup.button.callback(t(lang, 'back'), 'back_to_main')],
     ]);
-    await ctx.editMessageText(`🎁 *${t(lang, 'affiliate')}*`, { parse_mode: 'Markdown', ...keyboard });
+    await safeEditOrSend(ctx, `🎁 *${t(lang, 'affiliate')}*`, keyboard);
 }
 
 async function managerCountries(ctx) {
@@ -621,7 +647,7 @@ async function settingsFlow(ctx) {
         [Markup.button.callback('🌐 Change Language', 'settings_lang')],
         [Markup.button.callback(t(lang, 'back'), 'back_to_main')],
     ]);
-    await ctx.editMessageText(`⚙️ *Settings*`, { parse_mode: 'Markdown', ...keyboard });
+    await safeEditOrSend(ctx, `⚙️ *Settings*`, keyboard);
 }
 
 async function languageSelection(ctx) {
@@ -632,7 +658,7 @@ async function languageSelection(ctx) {
         [Markup.button.callback('🇵🇰 اردو', 'lang_ur')],
         [Markup.button.callback('🔙 Back', 'menu_settings')],
     ]);
-    await ctx.editMessageText('🌐 *Select Language*', { parse_mode: 'Markdown', ...keyboard });
+    await safeEditOrSend(ctx, '🌐 *Select Language*', keyboard);
 }
 
 // ==================== ADMIN FLOW ====================
@@ -655,13 +681,13 @@ async function adminStats(ctx) {
     const deposits = await getSubmissions({ type: 'player', data: { issueType: 'Deposit' } });
     const withdrawals = await getSubmissions({ type: 'player', data: { issueType: 'Withdrawal' } });
     const agents = await getSubmissions({ type: 'agent_response' });
-    await ctx.editMessageText(
+    await safeEditOrSend(ctx,
         `📊 *Statistics*\n\n` +
         `👥 Users: ${users.length}\n` +
         `💳 Deposits: ${deposits.length}\n` +
         `💰 Withdrawals: ${withdrawals.length}\n` +
         `🤝 Agents: ${agents.length}`,
-        { parse_mode: 'Markdown' }
+        {}
     );
 }
 
@@ -675,7 +701,7 @@ async function adminListIssues(ctx, type) {
         keyboard.push([Markup.button.callback(`View #${sub.requestNumber}`, `admin_view_${sub.requestNumber}`)]);
     }
     keyboard.push([Markup.button.callback('🔙 Back', 'admin_back')]);
-    await ctx.editMessageText(msg, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } });
+    await safeEditOrSend(ctx, msg, { reply_markup: { inline_keyboard: keyboard } });
 }
 
 async function adminViewSubmission(ctx, requestNumber) {
@@ -693,7 +719,7 @@ async function adminViewSubmission(ctx, requestNumber) {
         [Markup.button.callback('✅ Mark Resolved', `admin_resolve_${sub.userId}_${requestNumber}`)],
         [Markup.button.callback('🔙 Back', 'admin_back')],
     ]);
-    await ctx.editMessageText(details, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } });
+    await safeEditOrSend(ctx, details, { reply_markup: { inline_keyboard: keyboard } });
 }
 
 async function adminReply(ctx, userId, requestNumber, message) {
@@ -865,7 +891,8 @@ bot.on('text', async (ctx) => {
         await generateBanners(ctx, text.toUpperCase());
         clearSession(userId);
     } else {
-        await ctx.reply(`You said: ${text}`);
+        // Don't echo - just ignore
+        console.log(`Unhandled text from ${userId}: ${text}`);
     }
 });
 
@@ -897,6 +924,10 @@ bot.catch((err, ctx) => {
         console.log('🚀 Initializing bot...');
         await connectDB();
         await ensureFolder('./temp');
+        await ensureFolder('./assets/en/banners');
+        await ensureFolder('./assets/bn/banners');
+        await ensureFolder('./assets/hi/banners');
+        await ensureFolder('./assets/pk/banners');
         await bot.telegram.deleteWebhook();
         await bot.launch();
         console.log('✅ Bot is running and ready!');
