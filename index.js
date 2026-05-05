@@ -1,5 +1,5 @@
 // ============================================
-// index.js - COMPLETE WORKING BOT (FIXED)
+// index.js - COMPLETE WORKING BOT (USING REPLY)
 // ============================================
 
 require('dotenv').config();
@@ -19,7 +19,6 @@ const PORT = process.env.PORT || 3000;
 
 console.log('✅ Bot Token:', BOT_TOKEN ? 'Set' : 'Missing');
 console.log('✅ Admin IDs:', ADMIN_CHAT_IDS);
-console.log('✅ MongoDB URI:', MONGODB_URI ? 'Set' : 'Missing');
 
 // ==================== MONGODB SCHEMAS ====================
 const userSchema = new mongoose.Schema({
@@ -80,7 +79,6 @@ async function getSubmissions(filter = {}) {
     const query = {};
     if (filter.type) query.type = filter.type;
     if (filter.status) query.status = filter.status;
-    if (filter.userId) query.userId = filter.userId.toString();
     let results = await Submission.find(query).sort({ createdAt: -1 }).limit(50).lean();
     if (filter.data && filter.data.issueType) {
         results = results.filter(s => s.data && s.data.issueType === filter.data.issueType);
@@ -302,7 +300,7 @@ async function playerFlow(ctx) {
         [Markup.button.callback(`🇮🇳 ${t(lang, 'india')}`, 'player_in')],
         [Markup.button.callback(t(lang, 'back'), 'back_to_main')],
     ]);
-    await ctx.editMessageText(`👤 *${t(lang, 'player_support')}*\n\n${t(lang, 'select_country')}`, { parse_mode: 'Markdown', ...keyboard });
+    await ctx.reply(`👤 *${t(lang, 'player_support')}*\n\n${t(lang, 'select_country')}`, { parse_mode: 'Markdown', ...keyboard });
 }
 
 async function handleCountry(ctx, country) {
@@ -316,7 +314,7 @@ async function handleCountry(ctx, country) {
         [Markup.button.callback(t(lang, 'withdrawal'), 'player_withdrawal')],
         [Markup.button.callback(t(lang, 'back'), 'menu_player')],
     ]);
-    await ctx.editMessageText(`📋 *${t(lang, 'select_issue')}*`, { parse_mode: 'Markdown', ...keyboard });
+    await ctx.reply(`📋 *${t(lang, 'select_issue')}*`, { parse_mode: 'Markdown', ...keyboard });
 }
 
 async function handleIssue(ctx, type) {
@@ -339,7 +337,7 @@ async function handleIssue(ctx, type) {
             [Markup.button.callback(t(lang, 'back'), 'menu_player')],
         ]);
     }
-    await ctx.editMessageText(`💳 *Select Payment Method*`, { parse_mode: 'Markdown', ...keyboard });
+    await ctx.reply(`💳 *Select Payment Method*`, { parse_mode: 'Markdown', ...keyboard });
 }
 
 async function handlePayment(ctx, payment) {
@@ -347,40 +345,42 @@ async function handlePayment(ctx, payment) {
     session.data.payment = payment;
     if (session.data.issueType === 'Withdrawal') {
         session.state = 'waiting_player_id';
-        await ctx.editMessageText(`📢 *Enter your Player ID:*`, { parse_mode: 'Markdown' });
+        await ctx.reply(`📢 *Enter your Player ID:*`, { parse_mode: 'Markdown' });
     } else {
         session.state = 'waiting_user_id';
-        await ctx.editMessageText(`📢 *Enter your User ID:*`, { parse_mode: 'Markdown' });
+        await ctx.reply(`📢 *Enter your User ID:*`, { parse_mode: 'Markdown' });
     }
 }
 
-async function showDatePicker(ctx, isWithdrawal = false) {
-    const session = getSession(ctx.from.id);
-    const user = await getUser(ctx.from.id);
-    const lang = user?.language || 'en';
-    const now = new Date();
-    const year = now.getFullYear();
-    const month = now.getMonth();
-    const daysInMonth = new Date(year, month + 1, 0).getDate();
-    const firstDay = new Date(year, month, 1).getDay();
-    const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-    const monthName = monthNames[month];
-    const keyboard = [];
-    keyboard.push([Markup.button.callback(`📅 ${monthName} ${year}`, 'noop')]);
-    const days = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'];
-    keyboard.push(days.map(d => Markup.button.callback(d, 'noop')));
-    let week = [];
-    for (let i = 0; i < firstDay; i++) week.push(Markup.button.callback(' ', 'noop'));
-    for (let d = 1; d <= daysInMonth; d++) {
-        const callback = isWithdrawal ? `date_wd_${d}` : `date_d_${d}`;
-        week.push(Markup.button.callback(d.toString(), callback));
-        if (week.length === 7) { keyboard.push(week); week = []; }
+// ==================== TEXT HANDLER FOR FORMS ====================
+bot.on('text', async (ctx) => {
+    const userId = ctx.from.id;
+    const session = getSession(userId);
+    const text = ctx.message.text;
+
+    if (session.state === 'waiting_user_id') {
+        session.data.userId = text;
+        session.state = 'waiting_date';
+        await ctx.reply(`📅 *Enter date (DD/MM/YYYY):*`, { parse_mode: 'Markdown' });
+    } else if (session.state === 'waiting_player_id') {
+        session.data.playerId = text;
+        session.state = 'waiting_date';
+        await ctx.reply(`📅 *Enter date (DD/MM/YYYY):*`, { parse_mode: 'Markdown' });
+    } else if (session.state === 'waiting_date') {
+        session.data.date = text;
+        await showConfirmation(ctx);
+    } else if (session.state === 'waiting_promo') {
+        if (text.length > 10) return ctx.reply('⚠️ Max 10 characters');
+        await generateBanners(ctx, text.toUpperCase());
+        clearSession(userId);
+    } else if (session.state === 'admin_broadcast' && ADMIN_CHAT_IDS.includes(userId.toString())) {
+        await adminBroadcast(ctx, text);
+        clearSession(userId);
+    } else if (session.state === 'admin_replying' && ADMIN_CHAT_IDS.includes(userId.toString())) {
+        await adminReply(ctx, session.data.targetUserId, session.data.requestNumber, text);
+        clearSession(userId);
     }
-    if (week.length) keyboard.push(week);
-    keyboard.push([Markup.button.callback(t(lang, 'back'), 'menu_player')]);
-    session.state = 'waiting_date';
-    await ctx.editMessageText(`📅 *${t(lang, 'select_date')}*`, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } });
-}
+});
 
 async function showConfirmation(ctx) {
     const session = getSession(ctx.from.id);
@@ -391,16 +391,11 @@ async function showConfirmation(ctx) {
         if (['type', 'state', 'processing'].includes(k)) continue;
         details += `*${escapeMarkdown(k)}:* ${escapeMarkdown(String(v))}\n`;
     }
-    if (session.data.fileId) {
-        try {
-            await ctx.replyWithPhoto(session.data.fileId, { caption: `📎 *Your uploaded file*` });
-        } catch (e) {}
-    }
     const keyboard = Markup.inlineKeyboard([
         [Markup.button.callback(t(lang, 'submit'), 'confirm_yes')],
         [Markup.button.callback(t(lang, 'restart'), 'confirm_no')],
     ]);
-    await ctx.editMessageText(`📋 *${t(lang, 'confirm')}*\n\n${details}\n${t(lang, 'is_correct')}`, { parse_mode: 'Markdown', ...keyboard });
+    await ctx.reply(`📋 *${t(lang, 'confirm')}*\n\n${details}\n${t(lang, 'is_correct')}`, { parse_mode: 'Markdown', ...keyboard });
 }
 
 async function submitRequest(ctx) {
@@ -414,26 +409,26 @@ async function submitRequest(ctx) {
         const requestNumber = generateRequestNumber();
         session.data.requestNumber = requestNumber;
         await saveSubmission({ userId, type: 'player', requestNumber, data: session.data });
+        
         const adminKeyboard = Markup.inlineKeyboard([
             [Markup.button.callback('💬 Reply', `admin_reply_${userId}_${requestNumber}`)],
             [Markup.button.callback('✅ Mark Resolved', `admin_resolve_${userId}_${requestNumber}`)],
         ]);
+        
         let adminMsg = `👤 *New ${session.data.issueType} Request #${requestNumber}*\n\n`;
         adminMsg += `*User:* ${user?.name || 'Unknown'}\n*ID:* ${userId}\n`;
         for (const [k, v] of Object.entries(session.data)) {
             if (['type', 'state', 'processing', 'submitting', 'fileId'].includes(k)) continue;
             adminMsg += `*${escapeMarkdown(k)}:* ${escapeMarkdown(String(v))}\n`;
         }
+        
         for (const adminId of ADMIN_CHAT_IDS) {
             try {
-                if (session.data.fileId) {
-                    await bot.telegram.sendPhoto(adminId, session.data.fileId, { caption: adminMsg, parse_mode: 'Markdown', ...adminKeyboard });
-                } else {
-                    await bot.telegram.sendMessage(adminId, adminMsg, { parse_mode: 'Markdown', ...adminKeyboard });
-                }
+                await bot.telegram.sendMessage(adminId, adminMsg, { parse_mode: 'Markdown', ...adminKeyboard });
             } catch (e) {}
         }
-        await ctx.editMessageText(`✅ *${t(lang, 'request_registered')}* #${requestNumber}\n\n${t(lang, 'admin_will_respond')}`, { parse_mode: 'Markdown' });
+        
+        await ctx.reply(`✅ *${t(lang, 'request_registered')}* #${requestNumber}\n\n${t(lang, 'admin_will_respond')}`, { parse_mode: 'Markdown' });
         clearSession(userId);
     } catch (error) {
         console.error(error);
@@ -448,8 +443,6 @@ async function agentFlow(ctx) {
     const user = await getUser(ctx.from.id);
     const lang = user?.language || 'en';
     clearSession(ctx.from.id);
-    const session = getSession(ctx.from.id);
-    session.state = 'agent_country';
     const keyboard = Markup.inlineKeyboard([
         [Markup.button.callback(`🇧🇩 ${t(lang, 'bangladesh')}`, 'agent_bd')],
         [Markup.button.callback(`🇮🇳 ${t(lang, 'india')}`, 'agent_in')],
@@ -458,13 +451,10 @@ async function agentFlow(ctx) {
         [Markup.button.callback(`🇳🇵 ${t(lang, 'nepal')}`, 'agent_np')],
         [Markup.button.callback(t(lang, 'back'), 'back_to_main')],
     ]);
-    await ctx.editMessageText(`🧑‍💼 *${t(lang, 'agent_registration')}*\n\n${t(lang, 'select_country')}`, { parse_mode: 'Markdown', ...keyboard });
+    await ctx.reply(`🧑‍💼 *${t(lang, 'agent_registration')}*\n\n${t(lang, 'select_country')}`, { parse_mode: 'Markdown', ...keyboard });
 }
 
 async function agentDetails(ctx, country) {
-    const session = getSession(ctx.from.id);
-    session.data.country = country;
-    session.state = 'agent_details';
     const user = await getUser(ctx.from.id);
     const lang = user?.language || 'en';
     const msg = `${t(lang, 'agent_welcome')}\n\n${t(lang, 'agent_role')}\n\n${t(lang, 'agent_commission')}\n\n${t(lang, 'agent_prepay')}`;
@@ -491,12 +481,12 @@ async function agentResponse(ctx, country, response) {
     const lang = user?.language || 'en';
     const isInterested = response === 'accept';
     await saveSubmission({ userId, type: 'agent_response', data: { country, response, interested: isInterested } });
+    
     const adminMsg = `🧑‍💼 *Agent ${isInterested ? 'Interest' : 'Rejection'}*\n\nUser: ${user?.name}\nID: ${userId}\nCountry: ${country}\nResponse: ${isInterested ? 'ACCEPTED' : 'REJECTED'}`;
     for (const adminId of ADMIN_CHAT_IDS) {
-        try {
-            await bot.telegram.sendMessage(adminId, adminMsg, { parse_mode: 'Markdown' });
-        } catch (e) {}
+        try { await bot.telegram.sendMessage(adminId, adminMsg, { parse_mode: 'Markdown' }); } catch (e) {}
     }
+    
     if (isInterested) {
         await ctx.reply(`✅ ${t(lang, 'agent_registered')}\n\n${t(lang, 'agent_contact')}`);
     } else {
@@ -514,7 +504,7 @@ async function promoFlow(ctx) {
         [Markup.button.callback(`🎨 ${t(lang, 'promo_banner')}`, 'promo_banner')],
         [Markup.button.callback(t(lang, 'back'), 'back_to_main')],
     ]);
-    await ctx.editMessageText(`🎁 *${t(lang, 'affiliate')}*`, { parse_mode: 'Markdown', ...keyboard });
+    await ctx.reply(`🎁 *${t(lang, 'affiliate')}*`, { parse_mode: 'Markdown', ...keyboard });
 }
 
 async function managerCountries(ctx) {
@@ -604,7 +594,7 @@ async function settingsFlow(ctx) {
         [Markup.button.callback('🌐 Change Language', 'settings_lang')],
         [Markup.button.callback(t(lang, 'back'), 'back_to_main')],
     ]);
-    await ctx.editMessageText(`⚙️ *Settings*`, { parse_mode: 'Markdown', ...keyboard });
+    await ctx.reply(`⚙️ *Settings*`, { parse_mode: 'Markdown', ...keyboard });
 }
 
 async function languageSelection(ctx) {
@@ -615,7 +605,7 @@ async function languageSelection(ctx) {
         [Markup.button.callback('🇵🇰 اردو', 'lang_ur')],
         [Markup.button.callback('🔙 Back', 'menu_settings')],
     ]);
-    await ctx.editMessageText('🌐 *Select Language*', { parse_mode: 'Markdown', ...keyboard });
+    await ctx.reply('🌐 *Select Language*', { parse_mode: 'Markdown', ...keyboard });
 }
 
 // ==================== ADMIN FLOW ====================
@@ -630,7 +620,6 @@ async function adminBroadcast(ctx, message) {
         } catch (e) {}
     }
     await ctx.reply(`✅ Broadcast sent to ${sent} users.`);
-    clearSession(ctx.from.id);
 }
 
 async function adminStats(ctx) {
@@ -639,14 +628,9 @@ async function adminStats(ctx) {
     const withdrawals = await getSubmissions({ type: 'player', data: { issueType: 'Withdrawal' } });
     const agents = await getSubmissions({ type: 'agent_response' });
     await ctx.reply(
-        `📊 *Statistics*\n\n` +
-        `👥 Users: ${users.length}\n` +
-        `💳 Deposits: ${deposits.length}\n` +
-        `💰 Withdrawals: ${withdrawals.length}\n` +
-        `🤝 Agents: ${agents.length}`,
+        `📊 *Statistics*\n\n👥 Users: ${users.length}\n💳 Deposits: ${deposits.length}\n💰 Withdrawals: ${withdrawals.length}\n🤝 Agents: ${agents.length}`,
         { parse_mode: 'Markdown' }
     );
-    clearSession(ctx.from.id);
 }
 
 async function adminListIssues(ctx, type) {
@@ -702,6 +686,8 @@ bot.action('menu_player', playerFlow);
 bot.action('menu_agent', agentFlow);
 bot.action('menu_promo', promoFlow);
 bot.action('menu_settings', settingsFlow);
+bot.action('settings_lang', languageSelection);
+
 bot.action('back_to_main', async (ctx) => {
     await ctx.answerCallbackQuery().catch(() => {});
     clearSession(ctx.from.id);
@@ -717,7 +703,6 @@ bot.action('back_to_main', async (ctx) => {
     }
 });
 
-bot.action('settings_lang', languageSelection);
 bot.action(/lang_(en|bn|hi|ur)/, async (ctx) => {
     const lang = ctx.match[1];
     await ctx.answerCallbackQuery().catch(() => {});
@@ -740,16 +725,6 @@ for (const [key, value] of Object.entries(payments)) {
     bot.action(key, (ctx) => handlePayment(ctx, value));
 }
 
-bot.action(/date_d_(\d+)/, async (ctx) => {
-    const session = getSession(ctx.from.id);
-    session.data.date = ctx.match[1];
-    await showConfirmation(ctx);
-});
-bot.action(/date_wd_(\d+)/, async (ctx) => {
-    const session = getSession(ctx.from.id);
-    session.data.date = ctx.match[1];
-    await showConfirmation(ctx);
-});
 bot.action('confirm_yes', submitRequest);
 bot.action('confirm_no', async (ctx) => {
     clearSession(ctx.from.id);
@@ -832,50 +807,16 @@ bot.action(/admin_resolve_(\d+)_(\d+)/, async (ctx) => {
     await adminResolve(ctx, ctx.match[1], parseInt(ctx.match[2]));
 });
 
-// ==================== TEXT HANDLER ====================
-bot.on('text', async (ctx) => {
-    const userId = ctx.from.id;
-    const session = getSession(userId);
-    const text = ctx.message.text;
-
-    try {
-        if (session.state === 'admin_broadcast' && ADMIN_CHAT_IDS.includes(userId.toString())) {
-            await adminBroadcast(ctx, text);
-            clearSession(userId);
-        } else if (session.state === 'admin_replying' && ADMIN_CHAT_IDS.includes(userId.toString())) {
-            await adminReply(ctx, session.data.targetUserId, session.data.requestNumber, text);
-            clearSession(userId);
-        } else if (session.state === 'waiting_user_id') {
-            session.data.userId = text;
-            await showDatePicker(ctx, false);
-        } else if (session.state === 'waiting_player_id') {
-            session.data.playerId = text;
-            await showDatePicker(ctx, true);
-        } else if (session.state === 'waiting_promo') {
-            if (text.length > 10) return ctx.reply('⚠️ Max 10 characters');
-            await generateBanners(ctx, text.toUpperCase());
-            clearSession(userId);
-        }
-    } catch (error) {
-        console.error('Text handler error:', error);
-        await ctx.reply('⚠️ An error occurred. Please try again.');
-    }
-});
-
 // ==================== PHOTO HANDLER ====================
 bot.on('photo', async (ctx) => {
     const userId = ctx.from.id;
     const session = getSession(userId);
     const user = await getUser(userId);
     if (!user || !user.phone) return ctx.reply('Please use /start first.');
-    if (session.state === 'waiting_date' || session.state === 'waiting_user_id' || session.state === 'waiting_player_id') {
-        const photo = ctx.message.photo.pop();
-        session.data.fileId = photo.file_id;
-        session.data.fileName = 'photo.jpg';
-        await showConfirmation(ctx);
-    } else {
-        ctx.reply('Please start a request via Player Support first.');
-    }
+    const photo = ctx.message.photo.pop();
+    session.data.fileId = photo.file_id;
+    session.data.fileName = 'photo.jpg';
+    await showConfirmation(ctx);
 });
 
 // ==================== ERROR HANDLER ====================
@@ -890,6 +831,7 @@ bot.catch((err, ctx) => {
         console.log('🚀 Initializing bot...');
         await connectDB();
         await ensureFolder('./temp');
+        await ensureFolder('./assets/en/banners');
         await bot.telegram.deleteWebhook();
         await bot.launch();
         console.log('✅ Bot is running and ready!');
