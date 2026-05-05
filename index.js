@@ -1,5 +1,5 @@
 // ============================================
-// index.js - PLAYER SUPPORT + BROADCAST ONLY (FIXED)
+// index.js - PLAYER SUPPORT WITH PHOTO & REPLY
 // ============================================
 
 require('dotenv').config();
@@ -78,9 +78,25 @@ async function getSubmissions(filter = {}) {
     return await Submission.find(query).sort({ createdAt: -1 }).limit(50).lean();
 }
 
+async function updateRequestStatus(requestNumber, status) {
+    return await Submission.findOneAndUpdate(
+        { requestNumber: parseInt(requestNumber) },
+        { status: status },
+        { new: true }
+    );
+}
+
+async function getRequestByNumber(requestNumber) {
+    return await Submission.findOne({ requestNumber: parseInt(requestNumber) }).lean();
+}
+
 // ==================== HELPERS ====================
 function generateRequestNumber() {
     return Math.floor(1000 + Math.random() * 9000);
+}
+
+function formatDate(date = new Date()) {
+    return date.toLocaleString();
 }
 
 function escapeMarkdown(text) {
@@ -88,14 +104,13 @@ function escapeMarkdown(text) {
     return String(text).replace(/_/g, '\\_').replace(/\*/g, '\\*').replace(/\[/g, '\\[').replace(/`/g, '\\`');
 }
 
-// Safe answer callback query
 async function safeAnswer(ctx) {
     try {
         if (ctx && typeof ctx.answerCallbackQuery === 'function') {
             await ctx.answerCallbackQuery();
         }
     } catch (e) {
-        console.log('Answer callback error:', e.message);
+        // Ignore
     }
 }
 
@@ -123,6 +138,7 @@ async function showMainMenu(ctx) {
             [Markup.button.callback('👤 Player Support', 'menu_player')],
             [Markup.button.callback('📢 Broadcast', 'admin_broadcast')],
             [Markup.button.callback('📊 Statistics', 'admin_stats')],
+            [Markup.button.callback('📋 Pending Requests', 'admin_pending')],
         ]);
         await ctx.reply(`👑 *Admin Panel*\n\nWelcome ${user?.name || 'Admin'}!`, { parse_mode: 'Markdown', ...keyboard });
     } else {
@@ -149,7 +165,7 @@ bot.start(async (ctx) => {
         await showMainMenu(ctx);
     } else {
         await ctx.reply(
-            `👋 *Welcome!*\n\nPlease share your phone number to continue:`,
+            `👋 *Welcome to MobCash!*\n\nPlease share your phone number to continue:`,
             {
                 parse_mode: 'Markdown',
                 reply_markup: {
@@ -236,7 +252,36 @@ bot.action('issue_withdrawal', async (ctx) => {
     await ctx.reply('📝 *Enter your User ID:*', { parse_mode: 'Markdown' });
 });
 
-// ==================== BROADCAST FLOW (ADMIN ONLY) ====================
+// ==================== PAYMENT METHOD SELECTION ====================
+bot.action('select_payment', async (ctx) => {
+    await safeAnswer(ctx);
+    const state = userStates.get(ctx.from.id) || {};
+    const keyboard = Markup.inlineKeyboard([
+        [Markup.button.callback('bKash', 'pay_bkash'), Markup.button.callback('Nagad', 'pay_nagad')],
+        [Markup.button.callback('Rocket', 'pay_rocket'), Markup.button.callback('Upay', 'pay_upay')],
+        [Markup.button.callback('MoneyGo', 'pay_moneygo'), Markup.button.callback('Binance', 'pay_binance')],
+        [Markup.button.callback('🔙 Back', 'issue_deposit')],
+    ]);
+    await ctx.reply('💳 *Select payment method:*', { parse_mode: 'Markdown', ...keyboard });
+});
+
+const paymentMethods = {
+    pay_bkash: 'bKash', pay_nagad: 'Nagad', pay_rocket: 'Rocket',
+    pay_upay: 'Upay', pay_moneygo: 'MoneyGo', pay_binance: 'Binance'
+};
+
+for (const [action, method] of Object.entries(paymentMethods)) {
+    bot.action(action, async (ctx) => {
+        await safeAnswer(ctx);
+        const state = userStates.get(ctx.from.id) || {};
+        state.paymentMethod = method;
+        state.step = 'waiting_user_id';
+        userStates.set(ctx.from.id, state);
+        await ctx.reply(`📝 *Enter your ${method} User ID:*`, { parse_mode: 'Markdown' });
+    });
+}
+
+// ==================== ADMIN BROADCAST ====================
 bot.action('admin_broadcast', async (ctx) => {
     if (!ADMIN_CHAT_IDS.includes(ctx.from.id.toString())) return;
     await safeAnswer(ctx);
@@ -249,16 +294,120 @@ bot.action('admin_stats', async (ctx) => {
     await safeAnswer(ctx);
     const users = await getAllUsers();
     const submissions = await getSubmissions();
+    const pending = submissions.filter(s => s.status === 'pending');
     await ctx.reply(
         `📊 *Statistics*\n\n` +
         `👥 Total Users: ${users.length}\n` +
         `📝 Total Requests: ${submissions.length}\n` +
-        `⏳ Pending: ${submissions.filter(s => s.status === 'pending').length}`,
+        `⏳ Pending: ${pending.length}\n` +
+        `✅ Resolved: ${submissions.length - pending.length}`,
         { parse_mode: 'Markdown' }
     );
 });
 
-// ==================== BACK TO MAIN MENU ====================
+bot.action('admin_pending', async (ctx) => {
+    if (!ADMIN_CHAT_IDS.includes(ctx.from.id.toString())) return;
+    await safeAnswer(ctx);
+    const pending = await getSubmissions({ status: 'pending' });
+    
+    if (pending.length === 0) {
+        await ctx.reply('📭 *No pending requests.*', { parse_mode: 'Markdown' });
+        return;
+    }
+    
+    let msg = '*📋 Pending Requests*\n\n';
+    const keyboard = [];
+    for (const req of pending.slice(0, 10)) {
+        msg += `#${req.requestNumber} - ${req.data?.issueType || 'Unknown'}\n`;
+        keyboard.push([Markup.button.callback(`View #${req.requestNumber}`, `view_${req.requestNumber}`)]);
+    }
+    keyboard.push([Markup.button.callback('🔙 Back', 'back_to_main')]);
+    await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } });
+});
+
+// ==================== VIEW REQUEST DETAILS ====================
+bot.action(/view_(\d+)/, async (ctx) => {
+    if (!ADMIN_CHAT_IDS.includes(ctx.from.id.toString())) return;
+    await safeAnswer(ctx);
+    const requestNumber = parseInt(ctx.match[1]);
+    const request = await getRequestByNumber(requestNumber);
+    
+    if (!request) {
+        await ctx.reply('❌ Request not found.');
+        return;
+    }
+    
+    const data = request.data;
+    let details = `📋 *Request #${requestNumber}*\n\n`;
+    details += `*Status:* ${request.status}\n`;
+    details += `*User ID:* ${request.userId}\n`;
+    details += `*User Name:* ${data?.userName || 'Unknown'}\n`;
+    details += `*Country:* ${data?.country || 'Unknown'}\n`;
+    details += `*Issue:* ${data?.issueType || 'Unknown'}\n`;
+    if (data?.paymentMethod) details += `*Payment:* ${data.paymentMethod}\n`;
+    details += `*User/Player ID:* ${data?.userId || data?.playerId || 'N/A'}\n`;
+    details += `*Date:* ${data?.date || 'N/A'}\n`;
+    details += `*Submitted:* ${formatDate(request.createdAt)}\n`;
+    
+    const keyboard = Markup.inlineKeyboard([
+        [Markup.button.callback('💬 Reply to User', `reply_${request.userId}_${requestNumber}`)],
+        [Markup.button.callback('✅ Mark Resolved', `resolve_${requestNumber}`)],
+        [Markup.button.callback('🔙 Back', 'admin_pending')],
+    ]);
+    await ctx.reply(details, { parse_mode: 'Markdown', ...keyboard });
+});
+
+// ==================== ADMIN REPLY ====================
+bot.action(/reply_(\d+)_(\d+)/, async (ctx) => {
+    if (!ADMIN_CHAT_IDS.includes(ctx.from.id.toString())) return;
+    await safeAnswer(ctx);
+    const targetUserId = ctx.match[1];
+    const requestNumber = ctx.match[2];
+    
+    userStates.set(ctx.from.id, { 
+        step: 'admin_reply', 
+        targetUserId: targetUserId, 
+        requestNumber: requestNumber 
+    });
+    await ctx.reply(`✏️ *Reply to user #${requestNumber}*\n\nType your message below:`, { parse_mode: 'Markdown' });
+});
+
+bot.action(/resolve_(\d+)/, async (ctx) => {
+    if (!ADMIN_CHAT_IDS.includes(ctx.from.id.toString())) return;
+    await safeAnswer(ctx);
+    const requestNumber = parseInt(ctx.match[1]);
+    await updateRequestStatus(requestNumber, 'resolved');
+    
+    // Get the request to notify user
+    const request = await getRequestByNumber(requestNumber);
+    if (request) {
+        try {
+            await bot.telegram.sendMessage(request.userId, 
+                `✅ *Your request #${requestNumber} has been marked as resolved!*\n\nThank you for using MobCash.`,
+                { parse_mode: 'Markdown' }
+            );
+        } catch (e) {}
+    }
+    
+    await ctx.reply(`✅ Request #${requestNumber} marked as resolved.`);
+    
+    // Refresh the pending list
+    const pending = await getSubmissions({ status: 'pending' });
+    if (pending.length === 0) {
+        await ctx.reply('📭 *No pending requests remaining.*', { parse_mode: 'Markdown' });
+    } else {
+        let msg = '*📋 Pending Requests*\n\n';
+        const keyboard = [];
+        for (const req of pending.slice(0, 10)) {
+            msg += `#${req.requestNumber} - ${req.data?.issueType || 'Unknown'}\n`;
+            keyboard.push([Markup.button.callback(`View #${req.requestNumber}`, `view_${req.requestNumber}`)]);
+        }
+        keyboard.push([Markup.button.callback('🔙 Back', 'back_to_main')]);
+        await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } });
+    }
+});
+
+// ==================== BACK TO MAIN ====================
 bot.action('back_to_main', async (ctx) => {
     await safeAnswer(ctx);
     clearState(ctx.from.id);
@@ -287,12 +436,27 @@ bot.on('text', async (ctx) => {
         return;
     }
 
+    // Admin reply to user
+    if (state && state.step === 'admin_reply') {
+        try {
+            await bot.telegram.sendMessage(state.targetUserId, 
+                `📬 *Admin Response to Request #${state.requestNumber}*\n\n${text}`,
+                { parse_mode: 'Markdown' }
+            );
+            await ctx.reply(`✅ Reply sent to user #${state.requestNumber}.`);
+        } catch (error) {
+            await ctx.reply(`❌ Failed to send reply: ${error.message}`);
+        }
+        clearState(userId);
+        return;
+    }
+
     // Player flow - waiting for user ID
     if (state && state.step === 'waiting_user_id') {
-        state.userId = text;
+        state.userOrPlayerId = text;
         state.step = 'waiting_date';
         userStates.set(userId, state);
-        await ctx.reply('📅 *Enter date (DD/MM/YYYY):*', { parse_mode: 'Markdown' });
+        await ctx.reply('📅 *Enter date (DD/MM/YYYY):*\n\nExample: 15/03/2024', { parse_mode: 'Markdown' });
         return;
     }
 
@@ -302,11 +466,13 @@ bot.on('text', async (ctx) => {
         
         const confirmMsg = 
             `📋 *Confirm Your Details*\n\n` +
-            `Country: ${state.country}\n` +
-            `Issue: ${state.issueType}\n` +
-            `User ID: ${state.userId}\n` +
-            `Date: ${state.date}\n\n` +
-            `Is this correct?`;
+            `*Country:* ${state.country}\n` +
+            `*Issue:* ${state.issueType}\n` +
+            `*Payment Method:* ${state.paymentMethod || 'N/A'}\n` +
+            `*ID:* ${state.userOrPlayerId}\n` +
+            `*Date:* ${state.date}\n\n` +
+            `*You can also send a photo as proof (optional)*\n\n` +
+            `Is this information correct?`;
         
         const keyboard = Markup.inlineKeyboard([
             [Markup.button.callback('✅ Submit', 'confirm_yes')],
@@ -320,6 +486,19 @@ bot.on('text', async (ctx) => {
     }
 });
 
+// ==================== PHOTO HANDLER ====================
+bot.on('photo', async (ctx) => {
+    const userId = ctx.from.id;
+    const state = userStates.get(userId);
+    
+    if (state && (state.step === 'waiting_date' || state.step === 'confirm')) {
+        const photo = ctx.message.photo.pop();
+        state.photoId = photo.file_id;
+        userStates.set(userId, state);
+        await ctx.reply('📸 *Photo received!* You can still submit your request using the confirm button below.', { parse_mode: 'Markdown' });
+    }
+});
+
 // ==================== CONFIRMATION HANDLERS ====================
 bot.action('confirm_yes', async (ctx) => {
     await safeAnswer(ctx);
@@ -327,42 +506,79 @@ bot.action('confirm_yes', async (ctx) => {
     const state = userStates.get(userId);
     const user = await getUser(userId);
     
-    if (state) {
-        const requestNumber = generateRequestNumber();
-        
-        await saveSubmission({
-            userId: userId.toString(),
-            type: 'player',
-            requestNumber: requestNumber,
-            data: {
-                country: state.country,
-                issueType: state.issueType,
-                userId: state.userId,
-                date: state.date,
-                userName: user?.name
-            },
-            status: 'pending'
-        });
-        
-        // Notify admins
-        const adminMsg = 
-            `👤 *New ${state.issueType} Request #${requestNumber}*\n\n` +
-            `User: ${user?.name || 'Unknown'}\n` +
-            `ID: ${userId}\n` +
-            `Country: ${state.country}\n` +
-            `User ID: ${state.userId}\n` +
-            `Date: ${state.date}`;
-        
-        for (const adminId of ADMIN_CHAT_IDS) {
-            try {
-                await bot.telegram.sendMessage(adminId, adminMsg, { parse_mode: 'Markdown' });
-            } catch (e) {}
-        }
-        
-        await ctx.reply(`✅ *Request Registered!* #${requestNumber}\n\nAdmin will respond shortly.`, { parse_mode: 'Markdown' });
-        clearState(userId);
+    if (!state) {
+        await ctx.reply('⚠️ Session expired. Please start over.');
         await showMainMenu(ctx);
+        return;
     }
+    
+    const requestNumber = generateRequestNumber();
+    
+    await saveSubmission({
+        userId: userId.toString(),
+        type: 'player',
+        requestNumber: requestNumber,
+        data: {
+            country: state.country,
+            issueType: state.issueType,
+            paymentMethod: state.paymentMethod,
+            userId: state.userOrPlayerId,
+            date: state.date,
+            photoId: state.photoId,
+            userName: user?.name,
+            userPhone: user?.phone
+        },
+        status: 'pending'
+    });
+    
+    // Prepare admin notification
+    let adminMsg = 
+        `👤 *NEW REQUEST #${requestNumber}*\n\n` +
+        `*User:* ${user?.name || 'Unknown'}\n` +
+        `*ID:* ${userId}\n` +
+        `*Phone:* ${user?.phone || 'N/A'}\n` +
+        `*Country:* ${state.country}\n` +
+        `*Issue:* ${state.issueType}\n` +
+        `*Payment:* ${state.paymentMethod || 'N/A'}\n` +
+        `*User/Player ID:* ${state.userOrPlayerId}\n` +
+        `*Date:* ${state.date}\n\n` +
+        `*Status:* PENDING`;
+    
+    const adminKeyboard = Markup.inlineKeyboard([
+        [Markup.button.callback('💬 Reply', `reply_${userId}_${requestNumber}`)],
+        [Markup.button.callback('✅ Mark Resolved', `resolve_${requestNumber}`)],
+    ]);
+    
+    // Notify all admins
+    for (const adminId of ADMIN_CHAT_IDS) {
+        try {
+            if (state.photoId) {
+                await bot.telegram.sendPhoto(adminId, state.photoId, { 
+                    caption: adminMsg, 
+                    parse_mode: 'Markdown',
+                    ...adminKeyboard
+                });
+            } else {
+                await bot.telegram.sendMessage(adminId, adminMsg, { 
+                    parse_mode: 'Markdown',
+                    ...adminKeyboard
+                });
+            }
+        } catch (e) {
+            console.error(`Failed to notify admin ${adminId}:`, e.message);
+        }
+    }
+    
+    await ctx.reply(
+        `✅ *REQUEST REGISTERED!*\n\n` +
+        `*Request Number:* #${requestNumber}\n\n` +
+        `Our admin team will review your request and respond shortly.\n\n` +
+        `📱 You will receive a notification when admin replies.`,
+        { parse_mode: 'Markdown' }
+    );
+    
+    clearState(userId);
+    await showMainMenu(ctx);
 });
 
 bot.action('confirm_no', async (ctx) => {
