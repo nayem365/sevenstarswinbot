@@ -1,5 +1,5 @@
 // ============================================
-// index.js - COMPLETE BOT (ALL FEATURES WORKING)
+// index.js - COMPLETE BOT (DEPOSIT: AGENT NUMBER + TRX ID AS TICKET)
 // ============================================
 
 require('dotenv').config();
@@ -30,7 +30,7 @@ const userSchema = new mongoose.Schema({
 const submissionSchema = new mongoose.Schema({
     userId: { type: String, required: true },
     type: { type: String, default: 'player' },
-    requestNumber: Number,
+    ticketNumber: { type: String, required: true, unique: true },
     data: mongoose.Schema.Types.Mixed,
     status: { type: String, default: 'pending' },
     createdAt: { type: Date, default: Date.now },
@@ -38,7 +38,7 @@ const submissionSchema = new mongoose.Schema({
 });
 
 const conversationSchema = new mongoose.Schema({
-    requestNumber: { type: Number, required: true },
+    ticketNumber: { type: String, required: true },
     userId: { type: String, required: true },
     adminId: String,
     messages: [{
@@ -92,26 +92,26 @@ async function getSubmissions(filter = {}) {
     return await Submission.find(query).sort({ createdAt: -1 }).limit(50).lean();
 }
 
-async function updateRequestStatus(requestNumber, status) {
+async function updateTicketStatus(ticketNumber, status) {
     const updateData = { status: status };
     if (status === 'resolved') {
         updateData.resolvedAt = new Date();
     }
     return await Submission.findOneAndUpdate(
-        { requestNumber: parseInt(requestNumber) },
+        { ticketNumber: ticketNumber },
         updateData,
         { new: true }
     );
 }
 
-async function getRequestByNumber(requestNumber) {
-    return await Submission.findOne({ requestNumber: parseInt(requestNumber) }).lean();
+async function getTicketByNumber(ticketNumber) {
+    return await Submission.findOne({ ticketNumber: ticketNumber }).lean();
 }
 
-async function saveConversationMessage(requestNumber, userId, adminId, role, message) {
-    let conv = await Conversation.findOne({ requestNumber: requestNumber });
+async function saveConversationMessage(ticketNumber, userId, adminId, role, message) {
+    let conv = await Conversation.findOne({ ticketNumber: ticketNumber });
     if (!conv) {
-        conv = new Conversation({ requestNumber, userId, adminId, messages: [] });
+        conv = new Conversation({ ticketNumber, userId, adminId, messages: [] });
     }
     conv.messages.push({ role, message, timestamp: new Date() });
     conv.lastActivity = new Date();
@@ -119,15 +119,11 @@ async function saveConversationMessage(requestNumber, userId, adminId, role, mes
     return await conv.save();
 }
 
-async function getConversation(requestNumber) {
-    return await Conversation.findOne({ requestNumber: requestNumber }).lean();
+async function getConversation(ticketNumber) {
+    return await Conversation.findOne({ ticketNumber: ticketNumber }).lean();
 }
 
 // ==================== HELPERS ====================
-function generateRequestNumber() {
-    return Math.floor(1000 + Math.random() * 9000);
-}
-
 function formatDate(date = new Date()) {
     return date.toLocaleString();
 }
@@ -143,6 +139,10 @@ async function safeAnswer(ctx) {
             await ctx.answerCallbackQuery();
         }
     } catch (e) {}
+}
+
+function isValidNumber(num) {
+    return /^\d+$/.test(num);
 }
 
 // ==================== EXPRESS SERVER ====================
@@ -168,7 +168,7 @@ async function showMainMenu(ctx) {
             [Markup.button.callback('🎮 Player Support', 'menu_player')],
             [Markup.button.callback('📢 Broadcast', 'admin_broadcast')],
             [Markup.button.callback('📊 Statistics', 'admin_stats')],
-            [Markup.button.callback('📋 Pending Requests', 'admin_pending')],
+            [Markup.button.callback('📋 Pending Tickets', 'admin_pending')],
         ]);
         await ctx.reply(`👑 *ADMIN PANEL*\n\nWelcome ${user?.name || 'Admin'}! ✨`, { parse_mode: 'Markdown', ...keyboard });
     } else {
@@ -309,6 +309,22 @@ bot.action('issue_withdrawal', async (ctx) => {
     await ctx.reply('📝 *Enter your Player ID:*', { parse_mode: 'Markdown' });
 });
 
+// ==================== AGENT NUMBER (ONLY FOR DEPOSIT) ====================
+async function askAgentNumber(ctx) {
+    const keyboard = Markup.inlineKeyboard([
+        [Markup.button.callback('🔙 Back', 'menu_player')],
+    ]);
+    await ctx.reply('🤵 *ENTER AGENT NUMBER*\n\nPlease provide the agent number (numeric only).\n\nExample: 12345', { parse_mode: 'Markdown', ...keyboard });
+}
+
+// ==================== TRX ID (TICKET NUMBER) ====================
+async function askTrxId(ctx) {
+    const keyboard = Markup.inlineKeyboard([
+        [Markup.button.callback('🔙 Back', 'menu_player')],
+    ]);
+    await ctx.reply('🔢 *ENTER TRANSACTION ID (TRX ID)*\n\nPlease provide your transaction ID.\n\n*This will be your ticket number.*\n\nExample: TXN123456789', { parse_mode: 'Markdown', ...keyboard });
+}
+
 // ==================== DATE SELECTOR ====================
 async function showDateSelector(ctx) {
     const keyboard = Markup.inlineKeyboard([
@@ -350,7 +366,7 @@ bot.action('date_custom', async (ctx) => {
     await ctx.reply('📅 *Enter custom date*\n\nFormat: DD/MM/YYYY\nExample: 15/03/2024', { parse_mode: 'Markdown' });
 });
 
-// ==================== TIME INPUT (TEXT FORMAT) ====================
+// ==================== TIME INPUT ====================
 async function askTime(ctx) {
     const keyboard = Markup.inlineKeyboard([
         [Markup.button.callback('🔙 Back', 'menu_player')],
@@ -419,7 +435,9 @@ async function showReviewScreen(ctx) {
     reviewText += `📍 *Country:* ${state.country}\n`;
     reviewText += `💳 *Payment:* ${state.paymentMethod}\n`;
     reviewText += `📋 *Issue:* ${state.issueType}\n`;
-    reviewText += `🆔 *ID:* ${state.userOrPlayerId}\n`;
+    reviewText += `🆔 *User/Player ID:* ${state.userOrPlayerId}\n`;
+    if (state.agentNumber) reviewText += `🤵 *Agent Number:* ${state.agentNumber}\n`;
+    reviewText += `🔢 *TRX ID:* ${state.trxId}\n`;
     reviewText += `📅 *Date:* ${state.selectedDate || 'Not set'}\n`;
     reviewText += `⏰ *Time:* ${state.selectedTime || 'Not set'}\n`;
     reviewText += `📸 *Photo:* ${state.photoId ? '✅ Attached' : '⏭️ Skipped'}\n`;
@@ -455,17 +473,26 @@ bot.action('submit_request', async (ctx) => {
         return;
     }
     
-    const requestNumber = generateRequestNumber();
+    const ticketNumber = state.trxId;
+    
+    // Check if ticket number already exists
+    const existing = await getTicketByNumber(ticketNumber);
+    if (existing) {
+        await ctx.reply(`⚠️ *Ticket with TRX ID ${ticketNumber} already exists!*\n\nPlease use a different TRX ID.`, { parse_mode: 'Markdown' });
+        return;
+    }
     
     await saveSubmission({
         userId: userId.toString(),
         type: 'player',
-        requestNumber: requestNumber,
+        ticketNumber: ticketNumber,
         data: {
             country: state.country,
             issueType: state.issueType,
             paymentMethod: state.paymentMethod,
             userOrPlayerId: state.userOrPlayerId,
+            agentNumber: state.agentNumber || null,
+            trxId: state.trxId,
             date: state.selectedDate,
             time: state.selectedTime,
             photoId: state.photoId,
@@ -477,21 +504,24 @@ bot.action('submit_request', async (ctx) => {
     
     // Notify admins
     let adminMsg = 
-        `🎫 *NEW TICKET #${requestNumber}*\n\n` +
+        `🎫 *NEW TICKET #${ticketNumber}*\n\n` +
         `👤 *User:* ${user?.name || 'Unknown'}\n` +
-        `🆔 *ID:* ${userId}\n` +
+        `🆔 *User ID:* ${userId}\n` +
         `📍 *Country:* ${state.country}\n` +
         `💳 *Payment:* ${state.paymentMethod}\n` +
         `📋 *Issue:* ${state.issueType}\n` +
-        `🆔 *User/Player ID:* ${state.userOrPlayerId}\n` +
+        `🆔 *User/Player ID:* ${state.userOrPlayerId}\n`;
+    if (state.agentNumber) adminMsg += `🤵 *Agent Number:* ${state.agentNumber}\n`;
+    adminMsg += 
+        `🔢 *TRX ID:* ${state.trxId}\n` +
         `📅 *Date:* ${state.selectedDate || 'N/A'}\n` +
         `⏰ *Time:* ${state.selectedTime || 'N/A'}\n` +
         `📸 *Photo:* ${state.photoId ? '✅ Yes' : '❌ No'}\n\n` +
         `🟡 *Status: PENDING*`;
     
     const adminKeyboard = Markup.inlineKeyboard([
-        [Markup.button.callback('💬 Reply', `admin_reply_${requestNumber}`)],
-        [Markup.button.callback('✅ Resolve', `resolve_${requestNumber}`)],
+        [Markup.button.callback('💬 Reply', `admin_reply_${ticketNumber}`)],
+        [Markup.button.callback('✅ Resolve', `resolve_${ticketNumber}`)],
     ]);
     
     for (const adminId of ADMIN_CHAT_IDS) {
@@ -515,7 +545,7 @@ bot.action('submit_request', async (ctx) => {
     
     await ctx.reply(
         `✅ *TICKET CREATED!* 🎫\n\n` +
-        `📋 *Ticket #:* ${requestNumber}\n\n` +
+        `📋 *Ticket #:* ${ticketNumber}\n\n` +
         `🟡 *Status:* PENDING\n\n` +
         `Our support team will review your ticket and respond shortly.\n\n` +
         `📱 *You will be notified when there is a reply.*`,
@@ -556,12 +586,53 @@ bot.on('text', async (ctx) => {
         return;
     }
 
-    // Handle time input (text format)
+    // Handle time input
     if (state && state.step === 'time') {
         state.selectedTime = text;
         state.step = 'photo';
         userStates.set(userId, state);
         await askPhoto(ctx);
+        return;
+    }
+
+    // Handle user ID / player ID
+    if (state && state.step === 'user_id') {
+        state.userOrPlayerId = text;
+        if (state.issueType === 'Deposit') {
+            state.step = 'agent_number';
+            userStates.set(userId, state);
+            await askAgentNumber(ctx);
+        } else {
+            state.step = 'trx_id';
+            userStates.set(userId, state);
+            await askTrxId(ctx);
+        }
+        return;
+    }
+
+    // Handle agent number (numeric, only for deposit)
+    if (state && state.step === 'agent_number') {
+        if (isValidNumber(text)) {
+            state.agentNumber = text;
+            state.step = 'trx_id';
+            userStates.set(userId, state);
+            await askTrxId(ctx);
+        } else {
+            await ctx.reply('❌ *Invalid agent number*\n\nPlease enter numbers only.', { parse_mode: 'Markdown' });
+        }
+        return;
+    }
+
+    // Handle TRX ID
+    if (state && state.step === 'trx_id') {
+        if (text.trim().length > 0) {
+            state.trxId = text;
+            state.step = 'date';
+            userStates.set(userId, state);
+            await showDateSelector(ctx);
+        } else {
+            await ctx.reply('❌ *TRX ID cannot be empty*\n\nPlease enter a valid transaction ID.', { parse_mode: 'Markdown' });
+        }
         return;
     }
 
@@ -581,22 +652,22 @@ bot.on('text', async (ctx) => {
         return;
     }
 
-    // Handle admin reply to a specific request
+    // Handle admin reply to a specific ticket
     if (state && state.step === 'admin_reply') {
         const targetUserId = state.targetUserId;
-        const requestNumber = state.requestNumber;
+        const ticketNumber = state.ticketNumber;
         
-        await saveConversationMessage(parseInt(requestNumber), targetUserId, userId, 'admin', text);
+        await saveConversationMessage(ticketNumber, targetUserId, userId, 'admin', text);
         
         try {
             await bot.telegram.sendMessage(targetUserId, 
-                `📬 *ADMIN RESPONSE - TICKET #${requestNumber}*\n\n` +
+                `📬 *ADMIN RESPONSE - TICKET #${ticketNumber}*\n\n` +
                 `${text}\n\n` +
                 `━━━━━━━━━━━━━━━━━━━━━\n` +
                 `💬 *You can reply directly to this message*`,
                 { parse_mode: 'Markdown' }
             );
-            await ctx.reply(`✅ Reply sent to user for ticket #${requestNumber}.`);
+            await ctx.reply(`✅ Reply sent to user for ticket #${ticketNumber}.`);
         } catch (error) {
             await ctx.reply(`❌ Failed to send reply: ${error.message}`);
         }
@@ -612,21 +683,21 @@ bot.on('text', async (ctx) => {
         }).sort({ lastActivity: -1 });
         
         if (conversation) {
-            const request = await getRequestByNumber(conversation.requestNumber);
-            if (request && request.status !== 'resolved') {
-                await saveConversationMessage(conversation.requestNumber, userId, null, 'user', text);
+            const ticket = await getTicketByNumber(conversation.ticketNumber);
+            if (ticket && ticket.status !== 'resolved') {
+                await saveConversationMessage(conversation.ticketNumber, userId, null, 'user', text);
                 
                 const user = await getUser(userId);
                 const adminMsg = 
-                    `💬 *USER REPLY - TICKET #${conversation.requestNumber}*\n\n` +
+                    `💬 *USER REPLY - TICKET #${conversation.ticketNumber}*\n\n` +
                     `👤 *User:* ${user?.name || 'Unknown'}\n` +
                     `🆔 *User ID:* ${userId}\n` +
-                    `📋 *Ticket #:* ${conversation.requestNumber}\n\n` +
+                    `📋 *Ticket #:* ${conversation.ticketNumber}\n\n` +
                     `📝 *Message:*\n${text}`;
                 
                 const adminKeyboard = Markup.inlineKeyboard([
-                    [Markup.button.callback('💬 Reply', `admin_reply_${conversation.requestNumber}`)],
-                    [Markup.button.callback('✅ Resolve', `resolve_${conversation.requestNumber}`)],
+                    [Markup.button.callback('💬 Reply', `admin_reply_${conversation.ticketNumber}`)],
+                    [Markup.button.callback('✅ Resolve', `resolve_${conversation.ticketNumber}`)],
                 ]);
                 
                 for (const adminId of ADMIN_CHAT_IDS) {
@@ -644,21 +715,12 @@ bot.on('text', async (ctx) => {
         }
     }
 
-    // Handle player flow - waiting for user ID
-    if (state && state.step === 'user_id') {
-        state.userOrPlayerId = text;
-        state.step = 'date';
-        userStates.set(userId, state);
-        await showDateSelector(ctx);
-        return;
-    }
-
     if (!state && !isAdmin) {
         await ctx.reply(`💬 *Menu*\n\nUse /start to see the main menu.`, { parse_mode: 'Markdown' });
     }
 });
 
-// ==================== ADMIN PENDING REQUESTS ====================
+// ==================== ADMIN PENDING TICKETS ====================
 bot.action('admin_pending', async (ctx) => {
     if (!ADMIN_CHAT_IDS.includes(ctx.from.id.toString())) return;
     await safeAnswer(ctx);
@@ -672,43 +734,45 @@ bot.action('admin_pending', async (ctx) => {
     let msg = '*📋 PENDING TICKETS*\n\n';
     const keyboard = [];
     for (const req of pending.slice(0, 10)) {
-        msg += `🎫 #${req.requestNumber} - ${req.data?.issueType || 'Unknown'} (${req.data?.paymentMethod || 'N/A'})\n`;
-        keyboard.push([Markup.button.callback(`📋 View #${req.requestNumber}`, `view_${req.requestNumber}`)]);
+        msg += `🎫 #${req.ticketNumber} - ${req.data?.issueType || 'Unknown'} (${req.data?.paymentMethod || 'N/A'})\n`;
+        keyboard.push([Markup.button.callback(`📋 View #${req.ticketNumber}`, `view_${req.ticketNumber}`)]);
     }
     keyboard.push([Markup.button.callback('🔙 Back', 'back_to_main')]);
     await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } });
 });
 
-// ==================== VIEW REQUEST DETAILS ====================
-bot.action(/view_(\d+)/, async (ctx) => {
+// ==================== VIEW TICKET DETAILS ====================
+bot.action(/view_(.+)/, async (ctx) => {
     if (!ADMIN_CHAT_IDS.includes(ctx.from.id.toString())) return;
     await safeAnswer(ctx);
-    const requestNumber = parseInt(ctx.match[1]);
-    const request = await getRequestByNumber(requestNumber);
+    const ticketNumber = ctx.match[1];
+    const ticket = await getTicketByNumber(ticketNumber);
     
-    if (!request) {
+    if (!ticket) {
         await ctx.reply('❌ Ticket not found.');
         return;
     }
     
-    const data = request.data;
-    let details = `🎫 *TICKET #${requestNumber}*\n\n`;
-    details += `📌 *Status:* ${request.status === 'pending' ? '🟡 Pending' : '✅ Resolved'}\n`;
+    const data = ticket.data;
+    let details = `🎫 *TICKET #${ticketNumber}*\n\n`;
+    details += `📌 *Status:* ${ticket.status === 'pending' ? '🟡 Pending' : '✅ Resolved'}\n`;
     details += `👤 *User:* ${data?.userName || 'Unknown'}\n`;
-    details += `🆔 *User ID:* ${request.userId}\n`;
+    details += `🆔 *User ID:* ${ticket.userId}\n`;
     details += `📍 *Country:* ${data?.country || 'Unknown'}\n`;
     details += `💳 *Payment:* ${data?.paymentMethod || 'N/A'}\n`;
     details += `📋 *Issue:* ${data?.issueType || 'Unknown'}\n`;
     details += `🆔 *User/Player ID:* ${data?.userOrPlayerId || 'N/A'}\n`;
+    if (data?.agentNumber) details += `🤵 *Agent Number:* ${data.agentNumber}\n`;
+    details += `🔢 *TRX ID:* ${data?.trxId || 'N/A'}\n`;
     details += `📅 *Date:* ${data?.date || 'N/A'}\n`;
     details += `⏰ *Time:* ${data?.time || 'N/A'}\n`;
     details += `📸 *Photo:* ${data?.photoId ? '✅ Yes' : '❌ No'}\n`;
-    details += `📅 *Submitted:* ${formatDate(request.createdAt)}\n\n`;
+    details += `📅 *Submitted:* ${formatDate(ticket.createdAt)}\n\n`;
     details += `💬 *Click below to reply to this user.*`;
     
     const keyboard = Markup.inlineKeyboard([
-        [Markup.button.callback('💬 Reply to User', `admin_reply_${requestNumber}`)],
-        [Markup.button.callback('✅ Mark Resolved', `resolve_${requestNumber}`)],
+        [Markup.button.callback('💬 Reply to User', `admin_reply_${ticketNumber}`)],
+        [Markup.button.callback('✅ Mark Resolved', `resolve_${ticketNumber}`)],
         [Markup.button.callback('🔙 Back', 'admin_pending')],
     ]);
     
@@ -728,43 +792,43 @@ bot.action(/view_(\d+)/, async (ctx) => {
 });
 
 // ==================== ADMIN REPLY ====================
-bot.action(/admin_reply_(\d+)/, async (ctx) => {
+bot.action(/admin_reply_(.+)/, async (ctx) => {
     if (!ADMIN_CHAT_IDS.includes(ctx.from.id.toString())) return;
     await safeAnswer(ctx);
-    const requestNumber = ctx.match[1];
-    const request = await getRequestByNumber(parseInt(requestNumber));
+    const ticketNumber = ctx.match[1];
+    const ticket = await getTicketByNumber(ticketNumber);
     
-    if (!request) {
+    if (!ticket) {
         await ctx.reply('❌ Ticket not found.');
         return;
     }
     
     userStates.set(ctx.from.id, { 
         step: 'admin_reply', 
-        targetUserId: request.userId, 
-        requestNumber: requestNumber 
+        targetUserId: ticket.userId, 
+        ticketNumber: ticketNumber 
     });
-    await ctx.reply(`✏️ *REPLY TO TICKET #${requestNumber}*\n\nType your message below:`, { parse_mode: 'Markdown' });
+    await ctx.reply(`✏️ *REPLY TO TICKET #${ticketNumber}*\n\nType your message below:`, { parse_mode: 'Markdown' });
 });
 
-// ==================== RESOLVE REQUEST ====================
-bot.action(/resolve_(\d+)/, async (ctx) => {
+// ==================== RESOLVE TICKET ====================
+bot.action(/resolve_(.+)/, async (ctx) => {
     if (!ADMIN_CHAT_IDS.includes(ctx.from.id.toString())) return;
     await safeAnswer(ctx);
-    const requestNumber = parseInt(ctx.match[1]);
-    const request = await getRequestByNumber(requestNumber);
+    const ticketNumber = ctx.match[1];
+    const ticket = await getTicketByNumber(ticketNumber);
     
-    if (!request) {
+    if (!ticket) {
         await ctx.reply('❌ Ticket not found.');
         return;
     }
     
-    await updateRequestStatus(requestNumber, 'resolved');
+    await updateTicketStatus(ticketNumber, 'resolved');
     
     // Notify user with beautiful message
     try {
-        await bot.telegram.sendMessage(request.userId, 
-            `✅ *TICKET #${requestNumber} RESOLVED* 🎉\n\n` +
+        await bot.telegram.sendMessage(ticket.userId, 
+            `✅ *TICKET #${ticketNumber} RESOLVED* 🎉\n\n` +
             `Your request has been marked as resolved.\n` +
             `Thank you for using 7starswin! ⭐\n\n` +
             `🌟 *We appreciate your trust in us!* 🌟`,
@@ -772,7 +836,7 @@ bot.action(/resolve_(\d+)/, async (ctx) => {
         );
     } catch (e) {}
     
-    await ctx.reply(`✅ Ticket #${requestNumber} marked as resolved.`);
+    await ctx.reply(`✅ Ticket #${ticketNumber} marked as resolved.`);
 });
 
 // ==================== ADMIN STATS ====================
