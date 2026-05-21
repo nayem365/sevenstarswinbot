@@ -9,7 +9,8 @@ const ADMIN_GROUP_ID = process.env.ADMIN_GROUP_ID;
 const ADMIN_CHAT_IDS = process.env.ADMIN_CHAT_IDS
   ? process.env.ADMIN_CHAT_IDS.split(",").map((x) => x.trim())
   : [];
-const MONGODB_URI = process.env.MONGODB_URI || "mongodb://127.0.0.1:27017/support_bot";
+const MONGODB_URI =
+  process.env.MONGODB_URI || "mongodb://127.0.0.1:27017/support_bot";
 const PORT = process.env.PORT || 3000;
 
 if (!BOT_TOKEN) {
@@ -72,7 +73,7 @@ function clearState(id) {
 }
 
 function statusText(status) {
-  if (status === "processing") return "🟡 Processing";
+  if (status === "processing") return "🟡 Pending / Processing";
   if (status === "task_at_work") return "👨‍💻 Task At Work";
   if (status === "successful") return "✅ Successful";
   if (status === "resolved") return "🏁 Resolved";
@@ -91,7 +92,7 @@ function adminButtons(ticketNumber) {
     [Markup.button.callback("👁 Take Task", `take_${ticketNumber}`)],
     [Markup.button.callback("💬 Reply User", `admin_reply_${ticketNumber}`)],
     [
-      Markup.button.callback("✅ Successful", `success_${ticketNumber}`),
+      Markup.button.callback("✅ Mark Successful", `success_${ticketNumber}`),
       Markup.button.callback("🏁 Resolve", `resolve_${ticketNumber}`),
     ],
   ]);
@@ -99,7 +100,7 @@ function adminButtons(ticketNumber) {
 
 function ticketDetails(t) {
   return (
-    `🎫 NEW SUPPORT TICKET\n\n` +
+    `🎫 SUPPORT TICKET\n\n` +
     `🎟 Ticket: ${t.ticketNumber}\n` +
     `📌 Status: ${statusText(t.status)}\n` +
     `👤 User: ${t.userName || "Unknown"}\n` +
@@ -121,7 +122,9 @@ async function showMainMenu(ctx) {
     return ctx.reply(
       "👑 ADMIN PANEL\n\nChoose option 👇",
       Markup.inlineKeyboard([
-        [Markup.button.callback("📋 Pending / Task Tickets", "admin_tickets")],
+        [Markup.button.callback("📋 Pending", "admin_pending")],
+        [Markup.button.callback("👨‍💻 Task At Work", "admin_task")],
+        [Markup.button.callback("✅ Successful", "admin_successful")],
         [Markup.button.callback("📢 Broadcast", "broadcast")],
       ])
     );
@@ -186,7 +189,6 @@ bot.on("contact", async (ctx) => {
 
 bot.action("create_ticket", async (ctx) => {
   await ctx.answerCbQuery();
-  states.set(ctx.from.id, { step: "payment", issueType: null });
 
   return ctx.reply(
     "📋 Select issue type:",
@@ -280,8 +282,8 @@ bot.action("submit_ticket", async (ctx) => {
 
   try {
     const adminMsg = ticketDetails(ticket);
-
     let sentMsg;
+
     if (ticket.photoId) {
       sentMsg = await bot.telegram.sendPhoto(ADMIN_GROUP_ID, ticket.photoId, {
         caption: adminMsg,
@@ -314,6 +316,7 @@ bot.action(/user_reply_(.+)/, async (ctx) => {
   });
 
   if (!ticket) return ctx.reply("❌ Ticket not found.");
+  if (ticket.status === "resolved") return ctx.reply("🏁 This ticket is already resolved.");
 
   states.set(ctx.from.id, {
     step: "user_reply",
@@ -332,6 +335,7 @@ bot.action(/admin_reply_(.+)/, async (ctx) => {
 
   const ticket = await Ticket.findOne({ ticketNumber: ctx.match[1] });
   if (!ticket) return ctx.reply("❌ Ticket not found.");
+  if (ticket.status === "resolved") return ctx.reply("🏁 This ticket is already resolved.");
 
   states.set(ctx.from.id, {
     step: "admin_reply",
@@ -418,29 +422,47 @@ bot.action("mytickets", async (ctx) => {
   if (!tickets.length) return ctx.reply("❌ No tickets found.");
 
   for (const t of tickets) {
+    const buttons =
+      t.status === "resolved"
+        ? undefined
+        : userReplyButton(t.ticketNumber);
+
     await ctx.reply(
-      `🎫 ${t.ticketNumber}\n📌 Status: ${statusText(t.status)}\n👁 Checked By: ${t.checkedBy || "Not yet"}\n📅 Date: ${t.date}`,
-      userReplyButton(t.ticketNumber)
+      `🎫 ${t.ticketNumber}\n📌 Status: ${statusText(t.status)}\n👁 Checked By: ${
+        t.checkedBy || "Not yet"
+      }\n📅 Date: ${t.date}`,
+      buttons
     );
   }
 });
 
-bot.action("admin_tickets", async (ctx) => {
-  await ctx.answerCbQuery();
-
+async function showAdminTicketsByStatus(ctx, status, emptyText) {
   if (!isAdmin(ctx.from.id)) return ctx.reply("❌ Admin only.");
 
-  const tickets = await Ticket.find({
-    status: { $in: ["processing", "task_at_work", "successful"] },
-  })
-    .sort({ createdAt: -1 })
+  const tickets = await Ticket.find({ status })
+    .sort({ updatedAt: -1, createdAt: -1 })
     .limit(20);
 
-  if (!tickets.length) return ctx.reply("✅ No pending/task tickets.");
+  if (!tickets.length) return ctx.reply(emptyText);
 
   for (const t of tickets) {
     await ctx.reply(ticketDetails(t), adminButtons(t.ticketNumber));
   }
+}
+
+bot.action("admin_pending", async (ctx) => {
+  await ctx.answerCbQuery();
+  return showAdminTicketsByStatus(ctx, "processing", "✅ No pending tickets.");
+});
+
+bot.action("admin_task", async (ctx) => {
+  await ctx.answerCbQuery();
+  return showAdminTicketsByStatus(ctx, "task_at_work", "✅ No task at work tickets.");
+});
+
+bot.action("admin_successful", async (ctx) => {
+  await ctx.answerCbQuery();
+  return showAdminTicketsByStatus(ctx, "successful", "✅ No successful tickets.");
 });
 
 bot.action("broadcast", async (ctx) => {
@@ -493,11 +515,13 @@ async function sendAdminReplyToUser(ctx, ticket, type, fileId, text) {
     });
   }
 
-  await bot.telegram.sendMessage(
-    ADMIN_GROUP_ID,
-    `✅ Admin reply sent\n\n🎫 Ticket: ${ticket.ticketNumber}\n👤 Admin: ${ctx.from.first_name}`,
-    adminButtons(ticket.ticketNumber)
-  );
+  if (ADMIN_GROUP_ID) {
+    await bot.telegram.sendMessage(
+      ADMIN_GROUP_ID,
+      `✅ Admin reply sent\n\n🎫 Ticket: ${ticket.ticketNumber}\n👤 Admin: ${ctx.from.first_name}`,
+      adminButtons(ticket.ticketNumber)
+    );
+  }
 }
 
 async function sendUserReplyToGroup(ctx, ticket, type, fileId, text) {
@@ -542,6 +566,7 @@ async function handleStateMessage(ctx, type, fileId, text) {
 
   if (state.step === "admin_reply") {
     const ticket = await Ticket.findOne({ ticketNumber: state.ticketNumber });
+
     if (!ticket) {
       clearState(ctx.from.id);
       await ctx.reply("❌ Ticket not found.");
@@ -581,13 +606,19 @@ async function handleStateMessage(ctx, type, fileId, text) {
           await bot.telegram.sendMessage(user.userId, `📢 ADMIN BROADCAST\n\n${text}`);
         }
         if (type === "photo") {
-          await bot.telegram.sendPhoto(user.userId, fileId, { caption: text || "📢 Admin Broadcast" });
+          await bot.telegram.sendPhoto(user.userId, fileId, {
+            caption: text || "📢 Admin Broadcast",
+          });
         }
         if (type === "video") {
-          await bot.telegram.sendVideo(user.userId, fileId, { caption: text || "📢 Admin Broadcast" });
+          await bot.telegram.sendVideo(user.userId, fileId, {
+            caption: text || "📢 Admin Broadcast",
+          });
         }
         if (type === "document") {
-          await bot.telegram.sendDocument(user.userId, fileId, { caption: text || "📢 Admin Broadcast" });
+          await bot.telegram.sendDocument(user.userId, fileId, {
+            caption: text || "📢 Admin Broadcast",
+          });
         }
         sent++;
       } catch (e) {}
