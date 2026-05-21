@@ -1,5 +1,6 @@
 // ============================================
-// 7STARSWIN SUPPORT BOT - FULL BEAUTIFUL FIXED VERSION
+// 7STARSWIN FULL SUPPORT BOT
+// ADMIN GROUP VERSION
 // ============================================
 
 require("dotenv").config();
@@ -8,13 +9,21 @@ const express = require("express");
 const mongoose = require("mongoose");
 const { Telegraf, Markup } = require("telegraf");
 
+// ============================================
+// CONFIG
+// ============================================
+
 const BOT_TOKEN = process.env.BOT_TOKEN;
+
 const ADMIN_CHAT_IDS = process.env.ADMIN_CHAT_IDS
-  ? process.env.ADMIN_CHAT_IDS.split(",").map((id) => id.trim())
+  ? process.env.ADMIN_CHAT_IDS.split(",").map((x) => x.trim())
   : [];
 
+const ADMIN_GROUP_ID = process.env.ADMIN_GROUP_ID;
+
 const MONGODB_URI =
-  process.env.MONGODB_URI || "mongodb://127.0.0.1:27017/support_bot";
+  process.env.MONGODB_URI ||
+  "mongodb://127.0.0.1:27017/support_bot";
 
 const PORT = process.env.PORT || 3000;
 
@@ -29,7 +38,7 @@ app.get("/", (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`✅ Server Running On ${PORT}`);
+  console.log("✅ Server Running");
 });
 
 // ============================================
@@ -76,8 +85,10 @@ const ticketSchema = new mongoose.Schema({
   photoId: String,
   status: {
     type: String,
-    default: "pending",
+    default: "processing",
   },
+  checkedBy: String,
+  adminReply: String,
   createdAt: {
     type: Date,
     default: Date.now,
@@ -104,13 +115,16 @@ function clearState(userId) {
 bot.start(async (ctx) => {
   const userId = ctx.from.id.toString();
 
-  const isAdmin = ADMIN_CHAT_IDS.includes(userId);
+  const isAdmin =
+    ADMIN_CHAT_IDS.includes(userId);
 
-  let user = await User.findOne({ userId });
+  let user = await User.findOne({
+    userId,
+  });
 
   if (!user && !isAdmin) {
     return ctx.reply(
-      "📱 Please Share Your Contact Number",
+      "📱 Please Share Contact",
       {
         reply_markup: {
           keyboard: [
@@ -136,13 +150,14 @@ bot.start(async (ctx) => {
 // ============================================
 
 async function showMainMenu(ctx) {
-  const isAdmin = ADMIN_CHAT_IDS.includes(
-    ctx.from.id.toString()
-  );
+  const isAdmin =
+    ADMIN_CHAT_IDS.includes(
+      ctx.from.id.toString()
+    );
 
   if (isAdmin) {
     return ctx.reply(
-      "👑 ADMIN PANEL\n\nChoose Option Below 👇",
+      "👑 ADMIN PANEL",
       Markup.inlineKeyboard([
         [
           Markup.button.callback(
@@ -161,12 +176,18 @@ async function showMainMenu(ctx) {
   }
 
   ctx.reply(
-    "🏠 MAIN MENU\n\nWelcome To 7StarsWin Support ⭐",
+    "🏠 7STARSWIN SUPPORT ⭐",
     Markup.inlineKeyboard([
       [
         Markup.button.callback(
-          "🎫 Create Support Ticket",
+          "🎫 Create Ticket",
           "create_ticket"
+        ),
+      ],
+      [
+        Markup.button.callback(
+          "📋 My Tickets",
+          "mytickets"
         ),
       ],
     ])
@@ -186,9 +207,7 @@ bot.on("contact", async (ctx) => {
     },
     {
       userId: ctx.from.id.toString(),
-      name: `${ctx.from.first_name || ""} ${
-        ctx.from.last_name || ""
-      }`,
+      name: `${ctx.from.first_name}`,
       username: ctx.from.username || "",
       phone: contact.phone_number,
     },
@@ -222,13 +241,13 @@ bot.action("create_ticket", async (ctx) => {
     Markup.inlineKeyboard([
       [
         Markup.button.callback(
-          "💰 Deposit Issue",
+          "💰 Deposit",
           "deposit"
         ),
       ],
       [
         Markup.button.callback(
-          "💸 Withdrawal Issue",
+          "💸 Withdrawal",
           "withdraw"
         ),
       ],
@@ -237,7 +256,7 @@ bot.action("create_ticket", async (ctx) => {
 });
 
 // ============================================
-// ISSUE TYPE
+// ISSUE
 // ============================================
 
 bot.action("deposit", async (ctx) => {
@@ -249,7 +268,7 @@ bot.action("deposit", async (ctx) => {
   });
 
   ctx.reply(
-    "💳 Enter Payment Method\n\nExample:\n• BKASH\n• NAGAD\n• ROCKET"
+    "💳 Enter Payment Method\n\nExample:\nBKASH"
   );
 });
 
@@ -262,7 +281,7 @@ bot.action("withdraw", async (ctx) => {
   });
 
   ctx.reply(
-    "💳 Enter Payment Method\n\nExample:\n• BKASH\n• NAGAD\n• ROCKET"
+    "💳 Enter Payment Method\n\nExample:\nNAGAD"
   );
 });
 
@@ -312,38 +331,25 @@ bot.on("text", async (ctx) => {
   // ADMIN REPLY
   // ==========================================
 
-  if (state.step === "admin_reply") {
-    try {
-      await bot.telegram.sendMessage(
-        state.targetUserId,
-        `📩 ADMIN REPLY\n\n${text}\n\n💬 Reply Back Anytime`
-      );
+  if (state.step === "reply") {
+    const ticket = await Ticket.findOne({
+      ticketNumber: state.ticketNumber,
+    });
 
-      clearState(userId);
+    if (!ticket) return;
 
-      return ctx.reply("✅ Reply Sent");
-    } catch (err) {
-      return ctx.reply("❌ Failed To Send Reply");
-    }
-  }
+    ticket.adminReply = text;
 
-  // ==========================================
-  // USER REPLY
-  // ==========================================
+    await ticket.save();
 
-  if (state.step === "user_reply") {
-    for (const adminId of ADMIN_CHAT_IDS) {
-      try {
-        await bot.telegram.sendMessage(
-          adminId,
-          `💬 USER REPLY\n\n👤 ${ctx.from.first_name}\n\n${text}`
-        );
-      } catch (e) {}
-    }
-
-    return ctx.reply(
-      "✅ Your Reply Sent To Support Team"
+    await bot.telegram.sendMessage(
+      ticket.userId,
+      `💬 SUPPORT REPLY\n\n${text}\n\n📌 Status: Task At Work\n\nReply Anytime`
     );
+
+    clearState(userId);
+
+    return ctx.reply("✅ Reply Sent");
   }
 
   // ==========================================
@@ -362,7 +368,7 @@ bot.on("text", async (ctx) => {
   }
 
   // ==========================================
-  // PLAYER ID
+  // PLAYER
   // ==========================================
 
   if (state.step === "player") {
@@ -374,7 +380,7 @@ bot.on("text", async (ctx) => {
       states.set(userId, state);
 
       return ctx.reply(
-        "🤵 Enter Agent Number\n\nExample:\n786786"
+        "🤵 Enter Agent Number"
       );
     }
 
@@ -383,12 +389,12 @@ bot.on("text", async (ctx) => {
     states.set(userId, state);
 
     return ctx.reply(
-      "🔢 Enter TRX ID\n\nExample:\nTXN786786"
+      "🔢 Enter TRX ID"
     );
   }
 
   // ==========================================
-  // AGENT NUMBER
+  // AGENT
   // ==========================================
 
   if (state.step === "agent") {
@@ -398,12 +404,12 @@ bot.on("text", async (ctx) => {
     states.set(userId, state);
 
     return ctx.reply(
-      "🔢 Enter TRX ID\n\nExample:\nTXN786786"
+      "🔢 Enter TRX ID"
     );
   }
 
   // ==========================================
-  // TRX ID
+  // TRX
   // ==========================================
 
   if (state.step === "trx") {
@@ -413,7 +419,7 @@ bot.on("text", async (ctx) => {
     states.set(userId, state);
 
     return ctx.reply(
-      "📅 Enter Date\n\nExample:\n12/05/2026"
+      "📅 Enter Date"
     );
   }
 
@@ -428,7 +434,7 @@ bot.on("text", async (ctx) => {
     states.set(userId, state);
 
     return ctx.reply(
-      "⏰ Enter Time\n\nExample:\n3:45 PM"
+      "⏰ Enter Time"
     );
   }
 
@@ -443,7 +449,7 @@ bot.on("text", async (ctx) => {
     states.set(userId, state);
 
     return ctx.reply(
-      "📸 Send Screenshot\n\nOr Type: skip"
+      "📸 Send Screenshot\n\nOr Type skip"
     );
   }
 
@@ -455,7 +461,7 @@ bot.on("text", async (ctx) => {
     state.step === "photo" &&
     text.toLowerCase() === "skip"
   ) {
-    submitTicket(ctx, null);
+    return showPreview(ctx, null);
   }
 });
 
@@ -471,194 +477,375 @@ bot.on("photo", async (ctx) => {
   if (state.step === "photo") {
     const photo = ctx.message.photo.pop();
 
-    submitTicket(ctx, photo.file_id);
-  }
-
-  // ==========================================
-  // BROADCAST PHOTO
-  // ==========================================
-
-  if (state.step === "broadcast_photo") {
-    const photo = ctx.message.photo.pop();
-
-    const users = await User.find();
-
-    let sent = 0;
-
-    for (const user of users) {
-      try {
-        await bot.telegram.sendPhoto(
-          user.userId,
-          photo.file_id,
-          {
-            caption:
-              state.caption ||
-              "📢 Admin Broadcast",
-          }
-        );
-
-        sent++;
-      } catch (e) {}
-    }
-
-    clearState(ctx.from.id);
-
-    return ctx.reply(
-      `✅ Photo Broadcast Sent To ${sent} Users`
+    return showPreview(
+      ctx,
+      photo.file_id
     );
   }
 });
 
 // ============================================
-// SUBMIT TICKET
+// PREVIEW
 // ============================================
 
-async function submitTicket(ctx, photoId) {
+async function showPreview(
+  ctx,
+  photoId
+) {
   const state = states.get(ctx.from.id);
 
-  const ticketNumber =
-    "TICKET" + Date.now();
+  state.photoId = photoId;
 
-  const ticket = await Ticket.create({
-    ticketNumber,
-    userId: ctx.from.id.toString(),
-    userName: ctx.from.first_name,
-    issueType: state.issueType,
-    paymentMethod: state.paymentMethod,
-    playerId: state.playerId,
-    agentNumber: state.agentNumber || "",
-    trxId: state.trxId,
-    date: state.date,
-    time: state.time,
-    photoId: photoId || "",
-  });
+  states.set(ctx.from.id, state);
 
-  clearState(ctx.from.id);
+  let msg =
+    `📋 TICKET PREVIEW\n\n` +
+    `📌 Issue: ${state.issueType}\n` +
+    `💳 Payment: ${state.paymentMethod}\n` +
+    `🆔 Player ID: ${state.playerId}\n` +
+    `🤵 Agent: ${
+      state.agentNumber || "N/A"
+    }\n` +
+    `🔢 TRX: ${state.trxId}\n` +
+    `📅 Date: ${state.date}\n` +
+    `⏰ Time: ${state.time}\n\n` +
+    `✅ Everything Correct?`;
 
-  await ctx.reply(
-    `✅ Ticket Created Successfully 🎉\n\n🎫 Ticket ID: ${ticket.ticketNumber}\n\n⏳ Support Team Will Contact Soon`
-  );
-
-  // ==========================================
-  // ADMIN NOTIFICATION
-  // ==========================================
-
-  const msg =
-    `🎫 NEW SUPPORT TICKET\n\n` +
-    `🎟 Ticket: ${ticket.ticketNumber}\n` +
-    `👤 User: ${ticket.userName}\n` +
-    `📋 Issue: ${ticket.issueType}\n` +
-    `💳 Payment: ${ticket.paymentMethod}\n` +
-    `🆔 Player ID: ${ticket.playerId}\n` +
-    `🤵 Agent: ${ticket.agentNumber}\n` +
-    `🔢 TRX ID: ${ticket.trxId}\n` +
-    `📅 Date: ${ticket.date}\n` +
-    `⏰ Time: ${ticket.time}`;
-
-  for (const adminId of ADMIN_CHAT_IDS) {
-    try {
-      if (photoId) {
-        await bot.telegram.sendPhoto(
-          adminId,
-          photoId,
-          {
-            caption: msg,
-            ...Markup.inlineKeyboard([
-              [
-                Markup.button.callback(
-                  "💬 Reply",
-                  `reply_${ticket.userId}`
-                ),
-              ],
-            ]),
-          }
-        );
-      } else {
-        await bot.telegram.sendMessage(
-          adminId,
-          msg,
-          Markup.inlineKeyboard([
-            [
-              Markup.button.callback(
-                "💬 Reply",
-                `reply_${ticket.userId}`
-              ),
-            ],
-          ])
-        );
-      }
-    } catch (e) {
-      console.log(e);
-    }
-  }
-
-  showMainMenu(ctx);
-}
-
-// ============================================
-// REPLY BUTTON
-// ============================================
-
-bot.action(/reply_(.+)/, async (ctx) => {
-  await ctx.answerCbQuery();
-
-  const targetUserId = ctx.match[1];
-
-  states.set(ctx.from.id, {
-    step: "admin_reply",
-    targetUserId,
-  });
-
-  ctx.reply(
-    "💬 Send Reply Message To User"
-  );
-});
-
-// ============================================
-// PENDING
-// ============================================
-
-bot.action("pending", async (ctx) => {
-  await ctx.answerCbQuery();
-
-  const tickets = await Ticket.find({
-    status: "pending",
-  }).sort({
-    createdAt: -1,
-  });
-
-  if (!tickets.length) {
-    return ctx.reply("✅ No Pending Tickets");
-  }
-
-  for (const ticket of tickets) {
+  if (photoId) {
+    await ctx.replyWithPhoto(photoId, {
+      caption: msg,
+      ...Markup.inlineKeyboard([
+        [
+          Markup.button.callback(
+            "✅ Submit",
+            "submit_ticket"
+          ),
+        ],
+        [
+          Markup.button.callback(
+            "❌ Cancel",
+            "cancel_ticket"
+          ),
+        ],
+      ]),
+    });
+  } else {
     await ctx.reply(
-      `🎫 ${ticket.ticketNumber}\n👤 ${ticket.userName}\n📋 ${ticket.issueType}`,
+      msg,
       Markup.inlineKeyboard([
         [
           Markup.button.callback(
-            "💬 Reply",
-            `reply_${ticket.userId}`
+            "✅ Submit",
+            "submit_ticket"
+          ),
+        ],
+        [
+          Markup.button.callback(
+            "❌ Cancel",
+            "cancel_ticket"
           ),
         ],
       ])
     );
   }
-});
+}
+
+// ============================================
+// CANCEL
+// ============================================
+
+bot.action(
+  "cancel_ticket",
+  async (ctx) => {
+    await ctx.answerCbQuery();
+
+    clearState(ctx.from.id);
+
+    ctx.reply("❌ Ticket Cancelled");
+
+    showMainMenu(ctx);
+  }
+);
+
+// ============================================
+// SUBMIT
+// ============================================
+
+bot.action(
+  "submit_ticket",
+  async (ctx) => {
+    await ctx.answerCbQuery();
+
+    const state = states.get(ctx.from.id);
+
+    const ticketNumber =
+      "TICKET" + Date.now();
+
+    const ticket =
+      await Ticket.create({
+        ticketNumber,
+        userId: ctx.from.id.toString(),
+        userName: ctx.from.first_name,
+        issueType: state.issueType,
+        paymentMethod:
+          state.paymentMethod,
+        playerId: state.playerId,
+        agentNumber:
+          state.agentNumber || "",
+        trxId: state.trxId,
+        date: state.date,
+        time: state.time,
+        photoId:
+          state.photoId || "",
+      });
+
+    clearState(ctx.from.id);
+
+    await ctx.reply(
+      `✅ Ticket Submitted\n\n🎫 ${ticket.ticketNumber}\n\n📌 Status: Processing`
+    );
+
+    // ========================================
+    // SEND TO ADMIN GROUP
+    // ========================================
+
+    let adminMsg =
+      `🎫 NEW TICKET\n\n` +
+      `🎟 Ticket: ${ticket.ticketNumber}\n` +
+      `👤 User: ${ticket.userName}\n` +
+      `📌 Issue: ${ticket.issueType}\n` +
+      `💳 Payment: ${ticket.paymentMethod}\n` +
+      `🆔 Player: ${ticket.playerId}\n` +
+      `🤵 Agent: ${ticket.agentNumber}\n` +
+      `🔢 TRX: ${ticket.trxId}\n` +
+      `📅 Date: ${ticket.date}\n` +
+      `⏰ Time: ${ticket.time}\n\n` +
+      `📌 Status: Processing`;
+
+    const buttons =
+      Markup.inlineKeyboard([
+        [
+          Markup.button.callback(
+            "👁 Take Task",
+            `take_${ticket.ticketNumber}`
+          ),
+        ],
+        [
+          Markup.button.callback(
+            "💬 Reply",
+            `reply_${ticket.ticketNumber}`
+          ),
+        ],
+        [
+          Markup.button.callback(
+            "✅ Successful",
+            `success_${ticket.ticketNumber}`
+          ),
+        ],
+      ]);
+
+    if (ticket.photoId) {
+      await bot.telegram.sendPhoto(
+        ADMIN_GROUP_ID,
+        ticket.photoId,
+        {
+          caption: adminMsg,
+          ...buttons,
+        }
+      );
+    } else {
+      await bot.telegram.sendMessage(
+        ADMIN_GROUP_ID,
+        adminMsg,
+        buttons
+      );
+    }
+  }
+);
+
+// ============================================
+// TAKE TASK
+// ============================================
+
+bot.action(
+  /take_(.+)/,
+  async (ctx) => {
+    await ctx.answerCbQuery();
+
+    const ticketNumber =
+      ctx.match[1];
+
+    const ticket =
+      await Ticket.findOne({
+        ticketNumber,
+      });
+
+    if (!ticket) return;
+
+    ticket.checkedBy =
+      ctx.from.first_name;
+
+    ticket.status =
+      "task at work";
+
+    await ticket.save();
+
+    ctx.reply(
+      `👁 ${ctx.from.first_name} Checked Ticket ${ticketNumber}`
+    );
+
+    await bot.telegram.sendMessage(
+      ticket.userId,
+      `👨‍💻 Support Started Working\n\n🎫 ${ticket.ticketNumber}\n\n📌 Status: Task At Work`
+    );
+  }
+);
+
+// ============================================
+// REPLY
+// ============================================
+
+bot.action(
+  /reply_(.+)/,
+  async (ctx) => {
+    await ctx.answerCbQuery();
+
+    const ticketNumber =
+      ctx.match[1];
+
+    states.set(ctx.from.id, {
+      step: "reply",
+      ticketNumber,
+    });
+
+    ctx.reply(
+      "💬 Send Reply Message"
+    );
+  }
+);
+
+// ============================================
+// SUCCESS
+// ============================================
+
+bot.action(
+  /success_(.+)/,
+  async (ctx) => {
+    await ctx.answerCbQuery();
+
+    const ticketNumber =
+      ctx.match[1];
+
+    const ticket =
+      await Ticket.findOne({
+        ticketNumber,
+      });
+
+    if (!ticket) return;
+
+    ticket.status =
+      "successful";
+
+    await ticket.save();
+
+    ctx.reply(
+      `✅ Ticket ${ticketNumber} Marked Successful`
+    );
+
+    await bot.telegram.sendMessage(
+      ticket.userId,
+      `✅ Your Ticket Successful\n\n🎫 ${ticket.ticketNumber}\n\n📌 Status: Successful`
+    );
+  }
+);
+
+// ============================================
+// MY TICKETS
+// ============================================
+
+bot.action(
+  "mytickets",
+  async (ctx) => {
+    await ctx.answerCbQuery();
+
+    const tickets =
+      await Ticket.find({
+        userId:
+          ctx.from.id.toString(),
+      });
+
+    if (!tickets.length) {
+      return ctx.reply(
+        "❌ No Tickets Found"
+      );
+    }
+
+    for (const t of tickets) {
+      await ctx.reply(
+        `🎫 ${t.ticketNumber}\n📌 Status: ${t.status}\n👁 Checked By: ${
+          t.checkedBy || "Not Yet"
+        }`
+      );
+    }
+  }
+);
+
+// ============================================
+// PENDING
+// ============================================
+
+bot.action(
+  "pending",
+  async (ctx) => {
+    await ctx.answerCbQuery();
+
+    const tickets =
+      await Ticket.find({
+        status: {
+          $ne: "successful",
+        },
+      });
+
+    if (!tickets.length) {
+      return ctx.reply(
+        "✅ No Pending Tickets"
+      );
+    }
+
+    for (const t of tickets) {
+      await ctx.reply(
+        `🎫 ${t.ticketNumber}\n📌 ${t.status}\n👤 ${t.userName}`
+      );
+    }
+  }
+);
 
 // ============================================
 // BROADCAST
 // ============================================
 
-bot.action("broadcast", async (ctx) => {
-  await ctx.answerCbQuery();
+bot.action(
+  "broadcast",
+  async (ctx) => {
+    await ctx.answerCbQuery();
 
-  states.set(ctx.from.id, {
-    step: "broadcast",
-  });
+    states.set(ctx.from.id, {
+      step: "broadcast",
+    });
 
+    ctx.reply(
+      "📢 Send Broadcast Message"
+    );
+  }
+);
+
+// ============================================
+// GROUP ID
+// ============================================
+
+bot.command("groupid", (ctx) => {
   ctx.reply(
-    "📢 Send Broadcast Message\n\nYou Can Send:\n• Text\n• Photo"
+    `🆔 GROUP ID:\n${ctx.chat.id}`
   );
 });
 
@@ -667,7 +854,9 @@ bot.action("broadcast", async (ctx) => {
 // ============================================
 
 bot.command("myid", (ctx) => {
-  ctx.reply(`🆔 Your ID: ${ctx.from.id}`);
+  ctx.reply(
+    `🆔 YOUR ID:\n${ctx.from.id}`
+  );
 });
 
 // ============================================
@@ -675,22 +864,13 @@ bot.command("myid", (ctx) => {
 // ============================================
 
 bot.catch((err) => {
-  console.log("BOT ERROR:", err);
+  console.log(err);
 });
 
 // ============================================
-// START BOT
+// START
 // ============================================
 
 bot.launch();
 
 console.log("✅ BOT STARTED");
-
-// ============================================
-// STOP
-// ============================================
-
-process.once("SIGINT", () => bot.stop("SIGINT"));
-process.once("SIGTERM", () =>
-  bot.stop("SIGTERM")
-);
