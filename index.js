@@ -1,900 +1,612 @@
 // ============================================
-// index.js - COMPLETE BOT (DEPOSIT: AGENT NUMBER + TRX ID AS TICKET)
+// 7STARSWIN SUPPORT BOT - FULL FIXED VERSION
 // ============================================
 
-require('dotenv').config();
-const express = require('express');
-const { Telegraf, Markup } = require('telegraf');
-const mongoose = require('mongoose');
+require("dotenv").config();
 
-// ==================== CONFIGURATION ====================
+const express = require("express");
+const mongoose = require("mongoose");
+const { Telegraf, Markup } = require("telegraf");
+
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const ADMIN_CHAT_IDS = process.env.ADMIN_CHAT_IDS ? process.env.ADMIN_CHAT_IDS.split(',').map(id => id.trim()) : [];
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/mobcash_bot';
+const ADMIN_CHAT_IDS = process.env.ADMIN_CHAT_IDS
+  ? process.env.ADMIN_CHAT_IDS.split(",").map((id) => id.trim())
+  : [];
+
+const MONGODB_URI =
+  process.env.MONGODB_URI || "mongodb://127.0.0.1:27017/support_bot";
+
 const PORT = process.env.PORT || 3000;
 
-console.log('✅ Bot Token:', BOT_TOKEN ? 'Set' : 'Missing');
-console.log('✅ Admin IDs:', ADMIN_CHAT_IDS);
+// ============================================
+// CHECK ENV
+// ============================================
 
-// ==================== MONGODB SCHEMAS ====================
-const userSchema = new mongoose.Schema({
-    userId: { type: String, required: true, unique: true },
-    name: String,
-    username: String,
-    phone: String,
-    language: { type: String, default: 'en' },
-    registeredAt: { type: Date, default: Date.now },
-    lastActive: { type: Date, default: Date.now }
-});
-
-const submissionSchema = new mongoose.Schema({
-    userId: { type: String, required: true },
-    type: { type: String, default: 'player' },
-    ticketNumber: { type: String, required: true, unique: true },
-    data: mongoose.Schema.Types.Mixed,
-    status: { type: String, default: 'pending' },
-    createdAt: { type: Date, default: Date.now },
-    resolvedAt: Date
-});
-
-const conversationSchema = new mongoose.Schema({
-    ticketNumber: { type: String, required: true },
-    userId: { type: String, required: true },
-    adminId: String,
-    messages: [{
-        role: String,
-        message: String,
-        timestamp: { type: Date, default: Date.now }
-    }],
-    lastActivity: { type: Date, default: Date.now }
-});
-
-const User = mongoose.model('User', userSchema);
-const Submission = mongoose.model('Submission', submissionSchema);
-const Conversation = mongoose.model('Conversation', conversationSchema);
-
-// ==================== DATABASE FUNCTIONS ====================
-async function connectDB() {
-    try {
-        await mongoose.connect(MONGODB_URI);
-        console.log('✅ MongoDB connected');
-    } catch (error) {
-        console.error('❌ MongoDB connection error:', error);
-        throw error;
-    }
+if (!BOT_TOKEN) {
+  console.log("❌ BOT_TOKEN missing in .env");
+  process.exit(1);
 }
 
-async function getUser(userId) {
-    return await User.findOne({ userId: userId.toString() }).lean();
-}
+console.log("✅ Bot Starting...");
+console.log("✅ Admins:", ADMIN_CHAT_IDS);
 
-async function saveUser(userId, data) {
-    return await User.findOneAndUpdate(
-        { userId: userId.toString() },
-        { ...data, lastActive: new Date() },
-        { upsert: true, new: true }
-    );
-}
+// ============================================
+// EXPRESS
+// ============================================
 
-async function getAllUsers() {
-    return await User.find({}).lean();
-}
-
-async function saveSubmission(data) {
-    const submission = new Submission(data);
-    return await submission.save();
-}
-
-async function getSubmissions(filter = {}) {
-    const query = {};
-    if (filter.userId) query.userId = filter.userId.toString();
-    if (filter.status) query.status = filter.status;
-    return await Submission.find(query).sort({ createdAt: -1 }).limit(50).lean();
-}
-
-async function updateTicketStatus(ticketNumber, status) {
-    const updateData = { status: status };
-    if (status === 'resolved') {
-        updateData.resolvedAt = new Date();
-    }
-    return await Submission.findOneAndUpdate(
-        { ticketNumber: ticketNumber },
-        updateData,
-        { new: true }
-    );
-}
-
-async function getTicketByNumber(ticketNumber) {
-    return await Submission.findOne({ ticketNumber: ticketNumber }).lean();
-}
-
-async function saveConversationMessage(ticketNumber, userId, adminId, role, message) {
-    let conv = await Conversation.findOne({ ticketNumber: ticketNumber });
-    if (!conv) {
-        conv = new Conversation({ ticketNumber, userId, adminId, messages: [] });
-    }
-    conv.messages.push({ role, message, timestamp: new Date() });
-    conv.lastActivity = new Date();
-    if (adminId) conv.adminId = adminId;
-    return await conv.save();
-}
-
-async function getConversation(ticketNumber) {
-    return await Conversation.findOne({ ticketNumber: ticketNumber }).lean();
-}
-
-// ==================== HELPERS ====================
-function formatDate(date = new Date()) {
-    return date.toLocaleString();
-}
-
-function escapeMarkdown(text) {
-    if (!text) return '';
-    return String(text).replace(/_/g, '\\_').replace(/\*/g, '\\*').replace(/\[/g, '\\[').replace(/`/g, '\\`');
-}
-
-async function safeAnswer(ctx) {
-    try {
-        if (ctx && typeof ctx.answerCallbackQuery === 'function') {
-            await ctx.answerCallbackQuery();
-        }
-    } catch (e) {}
-}
-
-function isValidNumber(num) {
-    return /^\d+$/.test(num);
-}
-
-// ==================== EXPRESS SERVER ====================
 const app = express();
-app.get('/', (req, res) => res.send('✨ Bot is running! ✨'));
-app.listen(PORT, '0.0.0.0', () => console.log(`✅ Health check on port ${PORT}`));
 
-// ==================== BOT SETUP ====================
+app.get("/", (req, res) => {
+  res.send("✅ Bot Running");
+});
+
+app.listen(PORT, () => {
+  console.log(`✅ Server running on ${PORT}`);
+});
+
+// ============================================
+// BOT
+// ============================================
+
 const bot = new Telegraf(BOT_TOKEN);
-const userStates = new Map();
+
+// ============================================
+// DATABASE
+// ============================================
+
+mongoose
+  .connect(MONGODB_URI)
+  .then(() => console.log("✅ MongoDB Connected"))
+  .catch((err) => console.log("❌ MongoDB Error:", err));
+
+// ============================================
+// SCHEMA
+// ============================================
+
+const userSchema = new mongoose.Schema({
+  userId: String,
+  name: String,
+  username: String,
+  phone: String,
+  createdAt: {
+    type: Date,
+    default: Date.now,
+  },
+});
+
+const ticketSchema = new mongoose.Schema({
+  ticketNumber: String,
+  userId: String,
+  userName: String,
+  issueType: String,
+  paymentMethod: String,
+  playerId: String,
+  agentNumber: String,
+  trxId: String,
+  date: String,
+  time: String,
+  photoId: String,
+  status: {
+    type: String,
+    default: "pending",
+  },
+  createdAt: {
+    type: Date,
+    default: Date.now,
+  },
+});
+
+const User = mongoose.model("User", userSchema);
+const Ticket = mongoose.model("Ticket", ticketSchema);
+
+// ============================================
+// MEMORY STATE
+// ============================================
+
+const states = new Map();
 
 function clearState(userId) {
-    userStates.delete(userId);
+  states.delete(userId);
 }
 
-// ==================== MAIN MENU ====================
-async function showMainMenu(ctx) {
-    const user = await getUser(ctx.from.id);
-    const isAdmin = ADMIN_CHAT_IDS.includes(ctx.from.id.toString());
-    
-    if (isAdmin) {
-        const keyboard = Markup.inlineKeyboard([
-            [Markup.button.callback('🎮 Player Support', 'menu_player')],
-            [Markup.button.callback('📢 Broadcast', 'admin_broadcast')],
-            [Markup.button.callback('📊 Statistics', 'admin_stats')],
-            [Markup.button.callback('📋 Pending Tickets', 'admin_pending')],
-        ]);
-        await ctx.reply(`👑 *ADMIN PANEL*\n\nWelcome ${user?.name || 'Admin'}! ✨`, { parse_mode: 'Markdown', ...keyboard });
-    } else {
-        const keyboard = Markup.inlineKeyboard([
-            [Markup.button.callback('🎮 Create Support Ticket', 'menu_player')],
-        ]);
-        await ctx.reply(`🏠 *MAIN MENU*\n\nWelcome ${user?.name || 'User'}! ✨\n\nCreate a support ticket for any issue.`, { parse_mode: 'Markdown', ...keyboard });
-    }
+// ============================================
+// SAFE TEXT
+// ============================================
+
+function escapeText(text) {
+  if (!text) return "";
+  return String(text)
+    .replace(/_/g, "\\_")
+    .replace(/\*/g, "\\*")
+    .replace(/\[/g, "\\[")
+    .replace(/\]/g, "\\]")
+    .replace(/\(/g, "\\(")
+    .replace(/\)/g, "\\)");
 }
 
-// ==================== START COMMAND ====================
+// ============================================
+// START
+// ============================================
+
 bot.start(async (ctx) => {
-    const userId = ctx.from.id;
-    console.log(`🚀 /start from ${userId}`);
-    clearState(userId);
+  const userId = ctx.from.id.toString();
 
-    if (ADMIN_CHAT_IDS.includes(userId.toString())) {
-        await showMainMenu(ctx);
-        return;
-    }
+  let user = await User.findOne({ userId });
 
-    const user = await getUser(userId);
-    if (user && user.phone) {
-        await showMainMenu(ctx);
-    } else {
-        await ctx.reply(
-            `🌟 *WELCOME TO 7STARSWIN* 🌟\n\n` +
-            `Please share your phone number to continue:`,
-            {
-                parse_mode: 'Markdown',
-                reply_markup: {
-                    keyboard: [[{ text: '📱 Share Contact', request_contact: true }]],
-                    resize_keyboard: true,
-                    one_time_keyboard: true,
-                },
-            }
-        );
-    }
-});
-
-// ==================== CONTACT HANDLER ====================
-bot.on('contact', async (ctx) => {
-    const userId = ctx.from.id;
-    const contact = ctx.message.contact;
-    
-    if (contact.user_id !== userId) {
-        return ctx.reply('⚠️ Please share your own number.');
-    }
-    
-    await saveUser(userId, {
-        userId: userId.toString(),
-        name: `${ctx.from.first_name} ${ctx.from.last_name || ''}`.trim(),
-        username: ctx.from.username,
-        phone: contact.phone_number,
-        language: 'en',
-    });
-    
-    await ctx.reply('✅ *Phone Verified!* ✨\n\nYou can now create support tickets.', { parse_mode: 'Markdown', reply_markup: { remove_keyboard: true } });
-    await showMainMenu(ctx);
-});
-
-// ==================== PLAYER FLOW - COUNTRY ====================
-bot.action('menu_player', async (ctx) => {
-    await safeAnswer(ctx);
-    clearState(ctx.from.id);
-    
-    const keyboard = Markup.inlineKeyboard([
-        [Markup.button.callback('🇧🇩 Bangladesh', 'country_bd')],
-        [Markup.button.callback('🇮🇳 India', 'country_in')],
-        [Markup.button.callback('🔙 Back', 'back_to_main')],
-    ]);
-    await ctx.reply('📍 *SELECT YOUR COUNTRY*', { parse_mode: 'Markdown', ...keyboard });
-});
-
-// ==================== PAYMENT METHODS ====================
-bot.action('country_bd', async (ctx) => {
-    await safeAnswer(ctx);
-    userStates.set(ctx.from.id, { country: 'Bangladesh', step: 'payment' });
-    const keyboard = Markup.inlineKeyboard([
-        [Markup.button.callback('💳 bKash', 'pay_bkash'), Markup.button.callback('💳 Nagad', 'pay_nagad')],
-        [Markup.button.callback('💳 Rocket', 'pay_rocket'), Markup.button.callback('💳 Upay', 'pay_upay')],
-        [Markup.button.callback('💳 MoneyGo', 'pay_moneygo'), Markup.button.callback('💳 Binance', 'pay_binance')],
-        [Markup.button.callback('🔙 Back', 'menu_player')],
-    ]);
-    await ctx.reply('💳 *SELECT PAYMENT METHOD*', { parse_mode: 'Markdown', ...keyboard });
-});
-
-bot.action('country_in', async (ctx) => {
-    await safeAnswer(ctx);
-    userStates.set(ctx.from.id, { country: 'India', step: 'payment' });
-    const keyboard = Markup.inlineKeyboard([
-        [Markup.button.callback('💳 PhonePe', 'pay_phonepe'), Markup.button.callback('💳 PayTM', 'pay_paytm')],
-        [Markup.button.callback('💳 Google Pay', 'pay_gpay'), Markup.button.callback('💳 Amazon Pay', 'pay_amazon')],
-        [Markup.button.callback('🔙 Back', 'menu_player')],
-    ]);
-    await ctx.reply('💳 *SELECT PAYMENT METHOD*', { parse_mode: 'Markdown', ...keyboard });
-});
-
-const paymentMap = {
-    pay_bkash: 'bKash', pay_nagad: 'Nagad', pay_rocket: 'Rocket',
-    pay_upay: 'Upay', pay_moneygo: 'MoneyGo', pay_binance: 'Binance',
-    pay_phonepe: 'PhonePe', pay_paytm: 'PayTM', pay_gpay: 'Google Pay', pay_amazon: 'Amazon Pay'
-};
-
-for (const [action, method] of Object.entries(paymentMap)) {
-    bot.action(action, async (ctx) => {
-        await safeAnswer(ctx);
-        const state = userStates.get(ctx.from.id) || {};
-        state.paymentMethod = method;
-        state.step = 'issue';
-        userStates.set(ctx.from.id, state);
-        
-        const keyboard = Markup.inlineKeyboard([
-            [Markup.button.callback('💰 Deposit Issue', 'issue_deposit')],
-            [Markup.button.callback('💸 Withdrawal Issue', 'issue_withdrawal')],
-            [Markup.button.callback('🔙 Back', `country_${state.country === 'Bangladesh' ? 'bd' : 'in'}`)],
-        ]);
-        await ctx.reply(`📋 *SELECT ISSUE TYPE FOR ${method}*`, { parse_mode: 'Markdown', ...keyboard });
-    });
-}
-
-// ==================== ISSUE TYPE ====================
-bot.action('issue_deposit', async (ctx) => {
-    await safeAnswer(ctx);
-    const state = userStates.get(ctx.from.id) || {};
-    state.issueType = 'Deposit';
-    state.step = 'user_id';
-    userStates.set(ctx.from.id, state);
-    await ctx.reply('📝 *Enter your User ID:*', { parse_mode: 'Markdown' });
-});
-
-bot.action('issue_withdrawal', async (ctx) => {
-    await safeAnswer(ctx);
-    const state = userStates.get(ctx.from.id) || {};
-    state.issueType = 'Withdrawal';
-    state.step = 'user_id';
-    userStates.set(ctx.from.id, state);
-    await ctx.reply('📝 *Enter your Player ID:*', { parse_mode: 'Markdown' });
-});
-
-// ==================== AGENT NUMBER (ONLY FOR DEPOSIT) ====================
-async function askAgentNumber(ctx) {
-    const keyboard = Markup.inlineKeyboard([
-        [Markup.button.callback('🔙 Back', 'menu_player')],
-    ]);
-    await ctx.reply('🤵 *ENTER AGENT NUMBER*\n\nPlease provide the agent number (numeric only).\n\nExample: 12345', { parse_mode: 'Markdown', ...keyboard });
-}
-
-// ==================== TRX ID (TICKET NUMBER) ====================
-async function askTrxId(ctx) {
-    const keyboard = Markup.inlineKeyboard([
-        [Markup.button.callback('🔙 Back', 'menu_player')],
-    ]);
-    await ctx.reply('🔢 *ENTER TRANSACTION ID (TRX ID)*\n\nPlease provide your transaction ID.\n\n*This will be your ticket number.*\n\nExample: TXN123456789', { parse_mode: 'Markdown', ...keyboard });
-}
-
-// ==================== DATE SELECTOR ====================
-async function showDateSelector(ctx) {
-    const keyboard = Markup.inlineKeyboard([
-        [Markup.button.callback('📅 Today', 'date_today'), Markup.button.callback('📅 Tomorrow', 'date_tomorrow')],
-        [Markup.button.callback('📅 Pick Custom Date', 'date_custom')],
-        [Markup.button.callback('🔙 Back', 'menu_player')],
-    ]);
-    await ctx.reply('📅 *SELECT DATE*\n\nChoose when this issue occurred:', { parse_mode: 'Markdown', ...keyboard });
-}
-
-bot.action('date_today', async (ctx) => {
-    await safeAnswer(ctx);
-    const today = new Date();
-    const dateStr = today.toLocaleDateString();
-    const state = userStates.get(ctx.from.id) || {};
-    state.selectedDate = dateStr;
-    state.step = 'time';
-    userStates.set(ctx.from.id, state);
-    await askTime(ctx);
-});
-
-bot.action('date_tomorrow', async (ctx) => {
-    await safeAnswer(ctx);
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    const dateStr = tomorrow.toLocaleDateString();
-    const state = userStates.get(ctx.from.id) || {};
-    state.selectedDate = dateStr;
-    state.step = 'time';
-    userStates.set(ctx.from.id, state);
-    await askTime(ctx);
-});
-
-bot.action('date_custom', async (ctx) => {
-    await safeAnswer(ctx);
-    const state = userStates.get(ctx.from.id) || {};
-    state.step = 'waiting_custom_date';
-    userStates.set(ctx.from.id, state);
-    await ctx.reply('📅 *Enter custom date*\n\nFormat: DD/MM/YYYY\nExample: 15/03/2024', { parse_mode: 'Markdown' });
-});
-
-// ==================== TIME INPUT ====================
-async function askTime(ctx) {
-    const keyboard = Markup.inlineKeyboard([
-        [Markup.button.callback('🔙 Back', 'menu_player')],
-    ]);
-    await ctx.reply('⏰ *ENTER TIME*\n\nPlease write the time in text format.\n\nExample: "Around 3:00 PM" or "Morning 10:30 AM"', { parse_mode: 'Markdown', ...keyboard });
-}
-
-// ==================== PHOTO OPTION ====================
-async function askPhoto(ctx) {
-    const keyboard = Markup.inlineKeyboard([
-        [Markup.button.callback('📸 Send Photo', 'send_photo')],
-        [Markup.button.callback('⏭️ Skip Photo', 'skip_photo')],
-        [Markup.button.callback('🔙 Back', 'menu_player')],
-    ]);
-    await ctx.reply('📸 *PHOTO EVIDENCE*\n\nWould you like to attach a photo as proof?\n(Optional)', { parse_mode: 'Markdown', ...keyboard });
-}
-
-bot.action('send_photo', async (ctx) => {
-    await safeAnswer(ctx);
-    const state = userStates.get(ctx.from.id) || {};
-    state.step = 'waiting_photo';
-    userStates.set(ctx.from.id, state);
-    await ctx.reply('📸 *Send your photo now*', { parse_mode: 'Markdown' });
-});
-
-bot.action('skip_photo', async (ctx) => {
-    await safeAnswer(ctx);
-    const state = userStates.get(ctx.from.id) || {};
-    state.step = 'review';
-    userStates.set(ctx.from.id, state);
-    await showReviewScreen(ctx);
-});
-
-// ==================== PHOTO HANDLER ====================
-bot.on('photo', async (ctx) => {
-    const userId = ctx.from.id;
-    const state = userStates.get(userId);
-    const user = await getUser(userId);
-    
-    if (!user || !user.phone) {
-        return ctx.reply('⚠️ Please use /start first.');
-    }
-    
-    if (state && state.step === 'waiting_photo') {
-        const photo = ctx.message.photo.pop();
-        state.photoId = photo.file_id;
-        state.step = 'review';
-        userStates.set(userId, state);
-        await ctx.reply('📸 *Photo received!* ✅', { parse_mode: 'Markdown' });
-        await showReviewScreen(ctx);
-    } else {
-        await ctx.reply('📸 *Photo received!*\n\nPlease start a support request first using the Player Support button.', { parse_mode: 'Markdown' });
-    }
-});
-
-// ==================== REVIEW SCREEN ====================
-async function showReviewScreen(ctx) {
-    const state = userStates.get(ctx.from.id);
-    if (!state) {
-        await ctx.reply('⚠️ Session expired. Please start over.');
-        await showMainMenu(ctx);
-        return;
-    }
-    
-    let reviewText = `📋 *REVIEW YOUR INFORMATION*\n\n`;
-    reviewText += `📍 *Country:* ${state.country}\n`;
-    reviewText += `💳 *Payment:* ${state.paymentMethod}\n`;
-    reviewText += `📋 *Issue:* ${state.issueType}\n`;
-    reviewText += `🆔 *User/Player ID:* ${state.userOrPlayerId}\n`;
-    if (state.agentNumber) reviewText += `🤵 *Agent Number:* ${state.agentNumber}\n`;
-    reviewText += `🔢 *TRX ID:* ${state.trxId}\n`;
-    reviewText += `📅 *Date:* ${state.selectedDate || 'Not set'}\n`;
-    reviewText += `⏰ *Time:* ${state.selectedTime || 'Not set'}\n`;
-    reviewText += `📸 *Photo:* ${state.photoId ? '✅ Attached' : '⏭️ Skipped'}\n`;
-    reviewText += `\n✅ *Is all information correct?*`;
-    
-    const keyboard = Markup.inlineKeyboard([
-        [Markup.button.callback('✅ SUBMIT TICKET', 'submit_request')],
-        [Markup.button.callback('❌ CANCEL', 'cancel_request')],
-        [Markup.button.callback('🔙 Edit', 'menu_player')],
-    ]);
-    
-    if (state.photoId) {
-        try {
-            await ctx.replyWithPhoto(state.photoId, { caption: reviewText, parse_mode: 'Markdown', ...keyboard });
-        } catch (e) {
-            await ctx.reply(reviewText, { parse_mode: 'Markdown', ...keyboard });
-        }
-    } else {
-        await ctx.reply(reviewText, { parse_mode: 'Markdown', ...keyboard });
-    }
-}
-
-// ==================== SUBMIT REQUEST ====================
-bot.action('submit_request', async (ctx) => {
-    await safeAnswer(ctx);
-    const userId = ctx.from.id;
-    const state = userStates.get(userId);
-    const user = await getUser(userId);
-    
-    if (!state) {
-        await ctx.reply('⚠️ Session expired. Please start over.');
-        await showMainMenu(ctx);
-        return;
-    }
-    
-    const ticketNumber = state.trxId;
-    
-    // Check if ticket number already exists
-    const existing = await getTicketByNumber(ticketNumber);
-    if (existing) {
-        await ctx.reply(`⚠️ *Ticket with TRX ID ${ticketNumber} already exists!*\n\nPlease use a different TRX ID.`, { parse_mode: 'Markdown' });
-        return;
-    }
-    
-    await saveSubmission({
-        userId: userId.toString(),
-        type: 'player',
-        ticketNumber: ticketNumber,
-        data: {
-            country: state.country,
-            issueType: state.issueType,
-            paymentMethod: state.paymentMethod,
-            userOrPlayerId: state.userOrPlayerId,
-            agentNumber: state.agentNumber || null,
-            trxId: state.trxId,
-            date: state.selectedDate,
-            time: state.selectedTime,
-            photoId: state.photoId,
-            userName: user?.name,
-            userPhone: user?.phone
+  if (!user) {
+    await ctx.reply(
+      "📱 Share your phone number",
+      {
+        reply_markup: {
+          keyboard: [
+            [
+              {
+                text: "📱 Share Contact",
+                request_contact: true,
+              },
+            ],
+          ],
+          resize_keyboard: true,
+          one_time_keyboard: true,
         },
-        status: 'pending'
-    });
-    
-    // Notify admins
-    let adminMsg = 
-        `🎫 *NEW TICKET #${ticketNumber}*\n\n` +
-        `👤 *User:* ${user?.name || 'Unknown'}\n` +
-        `🆔 *User ID:* ${userId}\n` +
-        `📍 *Country:* ${state.country}\n` +
-        `💳 *Payment:* ${state.paymentMethod}\n` +
-        `📋 *Issue:* ${state.issueType}\n` +
-        `🆔 *User/Player ID:* ${state.userOrPlayerId}\n`;
-    if (state.agentNumber) adminMsg += `🤵 *Agent Number:* ${state.agentNumber}\n`;
-    adminMsg += 
-        `🔢 *TRX ID:* ${state.trxId}\n` +
-        `📅 *Date:* ${state.selectedDate || 'N/A'}\n` +
-        `⏰ *Time:* ${state.selectedTime || 'N/A'}\n` +
-        `📸 *Photo:* ${state.photoId ? '✅ Yes' : '❌ No'}\n\n` +
-        `🟡 *Status: PENDING*`;
-    
-    const adminKeyboard = Markup.inlineKeyboard([
-        [Markup.button.callback('💬 Reply', `admin_reply_${ticketNumber}`)],
-        [Markup.button.callback('✅ Resolve', `resolve_${ticketNumber}`)],
-    ]);
-    
-    for (const adminId of ADMIN_CHAT_IDS) {
-        try {
-            if (state.photoId) {
-                await bot.telegram.sendPhoto(adminId, state.photoId, { 
-                    caption: adminMsg, 
-                    parse_mode: 'Markdown',
-                    ...adminKeyboard
-                });
-            } else {
-                await bot.telegram.sendMessage(adminId, adminMsg, { 
-                    parse_mode: 'Markdown',
-                    ...adminKeyboard
-                });
-            }
-        } catch (e) {
-            console.error(`Failed to notify admin ${adminId}:`, e.message);
-        }
-    }
-    
-    await ctx.reply(
-        `✅ *TICKET CREATED!* 🎫\n\n` +
-        `📋 *Ticket #:* ${ticketNumber}\n\n` +
-        `🟡 *Status:* PENDING\n\n` +
-        `Our support team will review your ticket and respond shortly.\n\n` +
-        `📱 *You will be notified when there is a reply.*`,
-        { parse_mode: 'Markdown' }
+      }
     );
-    
-    clearState(userId);
-    await showMainMenu(ctx);
+
+    return;
+  }
+
+  return showMainMenu(ctx);
 });
 
-bot.action('cancel_request', async (ctx) => {
-    await safeAnswer(ctx);
-    clearState(ctx.from.id);
-    await ctx.reply('❌ *Ticket cancelled.*', { parse_mode: 'Markdown' });
-    await showMainMenu(ctx);
+// ============================================
+// MAIN MENU
+// ============================================
+
+async function showMainMenu(ctx) {
+  const isAdmin = ADMIN_CHAT_IDS.includes(ctx.from.id.toString());
+
+  if (isAdmin) {
+    return ctx.reply(
+      "👑 ADMIN PANEL",
+      Markup.inlineKeyboard([
+        [
+          Markup.button.callback(
+            "🎫 Create Ticket",
+            "create_ticket"
+          ),
+        ],
+        [
+          Markup.button.callback(
+            "📢 Broadcast",
+            "broadcast"
+          ),
+        ],
+        [
+          Markup.button.callback(
+            "📋 Pending Tickets",
+            "pending"
+          ),
+        ],
+      ])
+    );
+  }
+
+  return ctx.reply(
+    "🏠 MAIN MENU",
+    Markup.inlineKeyboard([
+      [
+        Markup.button.callback(
+          "🎫 Create Support Ticket",
+          "create_ticket"
+        ),
+      ],
+    ])
+  );
+}
+
+// ============================================
+// CONTACT SAVE
+// ============================================
+
+bot.on("contact", async (ctx) => {
+  const contact = ctx.message.contact;
+
+  if (contact.user_id !== ctx.from.id) {
+    return ctx.reply("❌ Send your own contact");
+  }
+
+  await User.findOneAndUpdate(
+    {
+      userId: ctx.from.id.toString(),
+    },
+    {
+      userId: ctx.from.id.toString(),
+      name: `${ctx.from.first_name || ""} ${ctx.from.last_name || ""}`,
+      username: ctx.from.username || "",
+      phone: contact.phone_number,
+    },
+    {
+      upsert: true,
+    }
+  );
+
+  await ctx.reply("✅ Registration Complete", {
+    reply_markup: {
+      remove_keyboard: true,
+    },
+  });
+
+  showMainMenu(ctx);
 });
 
-// ==================== TEXT HANDLER ====================
-bot.on('text', async (ctx) => {
-    const userId = ctx.from.id;
-    const state = userStates.get(userId);
-    const text = ctx.message.text;
-    const isAdmin = ADMIN_CHAT_IDS.includes(userId.toString());
+// ============================================
+// CREATE TICKET
+// ============================================
 
-    if (text.startsWith('/')) return;
+bot.action("create_ticket", async (ctx) => {
+  await ctx.answerCbQuery();
 
-    // Handle custom date input
-    if (state && state.step === 'waiting_custom_date') {
-        const dateRegex = /^\d{2}\/\d{2}\/\d{4}$/;
-        if (dateRegex.test(text)) {
-            state.selectedDate = text;
-            state.step = 'time';
-            userStates.set(userId, state);
-            await askTime(ctx);
-        } else {
-            await ctx.reply('❌ *Invalid date format*\n\nPlease use DD/MM/YYYY\nExample: 15/03/2024', { parse_mode: 'Markdown' });
-        }
-        return;
-    }
+  states.set(ctx.from.id, {
+    step: "issue_type",
+  });
 
-    // Handle time input
-    if (state && state.step === 'time') {
-        state.selectedTime = text;
-        state.step = 'photo';
-        userStates.set(userId, state);
-        await askPhoto(ctx);
-        return;
-    }
-
-    // Handle user ID / player ID
-    if (state && state.step === 'user_id') {
-        state.userOrPlayerId = text;
-        if (state.issueType === 'Deposit') {
-            state.step = 'agent_number';
-            userStates.set(userId, state);
-            await askAgentNumber(ctx);
-        } else {
-            state.step = 'trx_id';
-            userStates.set(userId, state);
-            await askTrxId(ctx);
-        }
-        return;
-    }
-
-    // Handle agent number (numeric, only for deposit)
-    if (state && state.step === 'agent_number') {
-        if (isValidNumber(text)) {
-            state.agentNumber = text;
-            state.step = 'trx_id';
-            userStates.set(userId, state);
-            await askTrxId(ctx);
-        } else {
-            await ctx.reply('❌ *Invalid agent number*\n\nPlease enter numbers only.', { parse_mode: 'Markdown' });
-        }
-        return;
-    }
-
-    // Handle TRX ID
-    if (state && state.step === 'trx_id') {
-        if (text.trim().length > 0) {
-            state.trxId = text;
-            state.step = 'date';
-            userStates.set(userId, state);
-            await showDateSelector(ctx);
-        } else {
-            await ctx.reply('❌ *TRX ID cannot be empty*\n\nPlease enter a valid transaction ID.', { parse_mode: 'Markdown' });
-        }
-        return;
-    }
-
-    // Handle admin broadcast
-    if (state && state.step === 'admin_broadcast') {
-        const users = await getAllUsers();
-        let sent = 0;
-        await ctx.reply(`📢 Broadcasting to ${users.length} users...`);
-        for (const user of users) {
-            try {
-                await bot.telegram.sendMessage(user.userId, text);
-                sent++;
-            } catch (e) {}
-        }
-        await ctx.reply(`✅ Broadcast sent to ${sent} users.`);
-        clearState(userId);
-        return;
-    }
-
-    // Handle admin reply to a specific ticket
-    if (state && state.step === 'admin_reply') {
-        const targetUserId = state.targetUserId;
-        const ticketNumber = state.ticketNumber;
-        
-        await saveConversationMessage(ticketNumber, targetUserId, userId, 'admin', text);
-        
-        try {
-            await bot.telegram.sendMessage(targetUserId, 
-                `📬 *ADMIN RESPONSE - TICKET #${ticketNumber}*\n\n` +
-                `${text}\n\n` +
-                `━━━━━━━━━━━━━━━━━━━━━\n` +
-                `💬 *You can reply directly to this message*`,
-                { parse_mode: 'Markdown' }
-            );
-            await ctx.reply(`✅ Reply sent to user for ticket #${ticketNumber}.`);
-        } catch (error) {
-            await ctx.reply(`❌ Failed to send reply: ${error.message}`);
-        }
-        clearState(userId);
-        return;
-    }
-
-    // Handle USER REPLY to admin
-    if (!isAdmin) {
-        const conversation = await Conversation.findOne({ 
-            userId: userId.toString(), 
-            lastActivity: { $gt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) }
-        }).sort({ lastActivity: -1 });
-        
-        if (conversation) {
-            const ticket = await getTicketByNumber(conversation.ticketNumber);
-            if (ticket && ticket.status !== 'resolved') {
-                await saveConversationMessage(conversation.ticketNumber, userId, null, 'user', text);
-                
-                const user = await getUser(userId);
-                const adminMsg = 
-                    `💬 *USER REPLY - TICKET #${conversation.ticketNumber}*\n\n` +
-                    `👤 *User:* ${user?.name || 'Unknown'}\n` +
-                    `🆔 *User ID:* ${userId}\n` +
-                    `📋 *Ticket #:* ${conversation.ticketNumber}\n\n` +
-                    `📝 *Message:*\n${text}`;
-                
-                const adminKeyboard = Markup.inlineKeyboard([
-                    [Markup.button.callback('💬 Reply', `admin_reply_${conversation.ticketNumber}`)],
-                    [Markup.button.callback('✅ Resolve', `resolve_${conversation.ticketNumber}`)],
-                ]);
-                
-                for (const adminId of ADMIN_CHAT_IDS) {
-                    try {
-                        await bot.telegram.sendMessage(adminId, adminMsg, { 
-                            parse_mode: 'Markdown',
-                            ...adminKeyboard
-                        });
-                    } catch (e) {}
-                }
-                
-                await ctx.reply(`✅ *Your reply has been sent to support.*\n\nWe will get back to you shortly.`, { parse_mode: 'Markdown' });
-                return;
-            }
-        }
-    }
-
-    if (!state && !isAdmin) {
-        await ctx.reply(`💬 *Menu*\n\nUse /start to see the main menu.`, { parse_mode: 'Markdown' });
-    }
+  ctx.reply(
+    "📋 Select Issue Type",
+    Markup.inlineKeyboard([
+      [
+        Markup.button.callback(
+          "💰 Deposit",
+          "deposit"
+        ),
+      ],
+      [
+        Markup.button.callback(
+          "💸 Withdrawal",
+          "withdraw"
+        ),
+      ],
+    ])
+  );
 });
 
-// ==================== ADMIN PENDING TICKETS ====================
-bot.action('admin_pending', async (ctx) => {
-    if (!ADMIN_CHAT_IDS.includes(ctx.from.id.toString())) return;
-    await safeAnswer(ctx);
-    const pending = await getSubmissions({ status: 'pending' });
-    
-    if (pending.length === 0) {
-        await ctx.reply('📭 *No pending tickets.*', { parse_mode: 'Markdown' });
-        return;
-    }
-    
-    let msg = '*📋 PENDING TICKETS*\n\n';
-    const keyboard = [];
-    for (const req of pending.slice(0, 10)) {
-        msg += `🎫 #${req.ticketNumber} - ${req.data?.issueType || 'Unknown'} (${req.data?.paymentMethod || 'N/A'})\n`;
-        keyboard.push([Markup.button.callback(`📋 View #${req.ticketNumber}`, `view_${req.ticketNumber}`)]);
-    }
-    keyboard.push([Markup.button.callback('🔙 Back', 'back_to_main')]);
-    await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } });
+// ============================================
+// ISSUE TYPE
+// ============================================
+
+bot.action("deposit", async (ctx) => {
+  await ctx.answerCbQuery();
+
+  let state = states.get(ctx.from.id);
+
+  state.issueType = "Deposit";
+  state.step = "payment";
+
+  states.set(ctx.from.id, state);
+
+  ctx.reply("💳 Enter Payment Method");
 });
 
-// ==================== VIEW TICKET DETAILS ====================
-bot.action(/view_(.+)/, async (ctx) => {
-    if (!ADMIN_CHAT_IDS.includes(ctx.from.id.toString())) return;
-    await safeAnswer(ctx);
-    const ticketNumber = ctx.match[1];
-    const ticket = await getTicketByNumber(ticketNumber);
-    
-    if (!ticket) {
-        await ctx.reply('❌ Ticket not found.');
-        return;
-    }
-    
-    const data = ticket.data;
-    let details = `🎫 *TICKET #${ticketNumber}*\n\n`;
-    details += `📌 *Status:* ${ticket.status === 'pending' ? '🟡 Pending' : '✅ Resolved'}\n`;
-    details += `👤 *User:* ${data?.userName || 'Unknown'}\n`;
-    details += `🆔 *User ID:* ${ticket.userId}\n`;
-    details += `📍 *Country:* ${data?.country || 'Unknown'}\n`;
-    details += `💳 *Payment:* ${data?.paymentMethod || 'N/A'}\n`;
-    details += `📋 *Issue:* ${data?.issueType || 'Unknown'}\n`;
-    details += `🆔 *User/Player ID:* ${data?.userOrPlayerId || 'N/A'}\n`;
-    if (data?.agentNumber) details += `🤵 *Agent Number:* ${data.agentNumber}\n`;
-    details += `🔢 *TRX ID:* ${data?.trxId || 'N/A'}\n`;
-    details += `📅 *Date:* ${data?.date || 'N/A'}\n`;
-    details += `⏰ *Time:* ${data?.time || 'N/A'}\n`;
-    details += `📸 *Photo:* ${data?.photoId ? '✅ Yes' : '❌ No'}\n`;
-    details += `📅 *Submitted:* ${formatDate(ticket.createdAt)}\n\n`;
-    details += `💬 *Click below to reply to this user.*`;
-    
-    const keyboard = Markup.inlineKeyboard([
-        [Markup.button.callback('💬 Reply to User', `admin_reply_${ticketNumber}`)],
-        [Markup.button.callback('✅ Mark Resolved', `resolve_${ticketNumber}`)],
-        [Markup.button.callback('🔙 Back', 'admin_pending')],
-    ]);
-    
-    if (data?.photoId) {
-        try {
-            await bot.telegram.sendPhoto(ctx.from.id, data.photoId, {
-                caption: details,
-                parse_mode: 'Markdown',
-                reply_markup: keyboard.reply_markup
-            });
-        } catch (e) {
-            await ctx.reply(details, { parse_mode: 'Markdown', ...keyboard });
-        }
-    } else {
-        await ctx.reply(details, { parse_mode: 'Markdown', ...keyboard });
-    }
+bot.action("withdraw", async (ctx) => {
+  await ctx.answerCbQuery();
+
+  let state = states.get(ctx.from.id);
+
+  state.issueType = "Withdrawal";
+  state.step = "payment";
+
+  states.set(ctx.from.id, state);
+
+  ctx.reply("💳 Enter Payment Method");
 });
 
-// ==================== ADMIN REPLY ====================
-bot.action(/admin_reply_(.+)/, async (ctx) => {
-    if (!ADMIN_CHAT_IDS.includes(ctx.from.id.toString())) return;
-    await safeAnswer(ctx);
-    const ticketNumber = ctx.match[1];
-    const ticket = await getTicketByNumber(ticketNumber);
-    
-    if (!ticket) {
-        await ctx.reply('❌ Ticket not found.');
-        return;
-    }
-    
-    userStates.set(ctx.from.id, { 
-        step: 'admin_reply', 
-        targetUserId: ticket.userId, 
-        ticketNumber: ticketNumber 
-    });
-    await ctx.reply(`✏️ *REPLY TO TICKET #${ticketNumber}*\n\nType your message below:`, { parse_mode: 'Markdown' });
-});
+// ============================================
+// TEXT FLOW
+// ============================================
 
-// ==================== RESOLVE TICKET ====================
-bot.action(/resolve_(.+)/, async (ctx) => {
-    if (!ADMIN_CHAT_IDS.includes(ctx.from.id.toString())) return;
-    await safeAnswer(ctx);
-    const ticketNumber = ctx.match[1];
-    const ticket = await getTicketByNumber(ticketNumber);
-    
-    if (!ticket) {
-        await ctx.reply('❌ Ticket not found.');
-        return;
-    }
-    
-    await updateTicketStatus(ticketNumber, 'resolved');
-    
-    // Notify user with beautiful message
-    try {
-        await bot.telegram.sendMessage(ticket.userId, 
-            `✅ *TICKET #${ticketNumber} RESOLVED* 🎉\n\n` +
-            `Your request has been marked as resolved.\n` +
-            `Thank you for using 7starswin! ⭐\n\n` +
-            `🌟 *We appreciate your trust in us!* 🌟`,
-            { parse_mode: 'Markdown' }
+bot.on("text", async (ctx) => {
+  const text = ctx.message.text;
+  const userId = ctx.from.id;
+
+  if (text.startsWith("/")) return;
+
+  const state = states.get(userId);
+
+  // =========================================
+  // BROADCAST
+  // =========================================
+
+  if (state && state.step === "broadcast") {
+    const users = await User.find();
+
+    let success = 0;
+
+    for (const user of users) {
+      try {
+        await bot.telegram.sendMessage(
+          user.userId,
+          `📢 ADMIN MESSAGE\n\n${text}`
         );
-    } catch (e) {}
-    
-    await ctx.reply(`✅ Ticket #${ticketNumber} marked as resolved.`);
-});
 
-// ==================== ADMIN STATS ====================
-bot.action('admin_stats', async (ctx) => {
-    if (!ADMIN_CHAT_IDS.includes(ctx.from.id.toString())) return;
-    await safeAnswer(ctx);
-    const users = await getAllUsers();
-    const submissions = await getSubmissions();
-    const pending = submissions.filter(s => s.status === 'pending');
-    await ctx.reply(
-        `📊 *STATISTICS* 📊\n\n` +
-        `👥 *Total Users:* ${users.length}\n` +
-        `📝 *Total Tickets:* ${submissions.length}\n` +
-        `🟡 *Pending:* ${pending.length}\n` +
-        `✅ *Resolved:* ${submissions.length - pending.length}\n\n` +
-        `✨ *7Starswin Support Team* ✨`,
-        { parse_mode: 'Markdown' }
-    );
-});
-
-// ==================== ADMIN BROADCAST ====================
-bot.action('admin_broadcast', async (ctx) => {
-    if (!ADMIN_CHAT_IDS.includes(ctx.from.id.toString())) return;
-    await safeAnswer(ctx);
-    userStates.set(ctx.from.id, { step: 'admin_broadcast' });
-    await ctx.reply('📢 *ENTER BROADCAST MESSAGE*\n\nType your message below:', { parse_mode: 'Markdown' });
-});
-
-// ==================== BACK TO MAIN ====================
-bot.action('back_to_main', async (ctx) => {
-    await safeAnswer(ctx);
-    clearState(ctx.from.id);
-    await showMainMenu(ctx);
-});
-
-// ==================== ERROR HANDLER ====================
-bot.catch((err, ctx) => {
-    console.error('❌ Bot error:', err);
-    try {
-        if (ctx && typeof ctx.reply === 'function') {
-            ctx.reply('⚠️ An error occurred. Please try again.').catch(() => {});
-        }
-    } catch (e) {}
-});
-
-// ==================== LAUNCH ====================
-(async () => {
-    try {
-        console.log('🚀 Initializing bot...');
-        await connectDB();
-        await bot.telegram.deleteWebhook();
-        await bot.launch();
-        console.log('✅ Bot is running and ready!');
-    } catch (err) {
-        console.error('❌ Launch failed:', err);
-        process.exit(1);
+        success++;
+      } catch (e) {}
     }
-})();
 
-process.once('SIGINT', async () => { await bot.stop('SIGINT'); await mongoose.disconnect(); process.exit(0); });
-process.once('SIGTERM', async () => { await bot.stop('SIGTERM'); await mongoose.disconnect(); process.exit(0); });
+    clearState(userId);
+
+    return ctx.reply(`✅ Broadcast sent to ${success} users`);
+  }
+
+  if (!state) return;
+
+  // =========================================
+  // PAYMENT
+  // =========================================
+
+  if (state.step === "payment") {
+    state.paymentMethod = text;
+    state.step = "player";
+
+    states.set(userId, state);
+
+    return ctx.reply("🆔 Enter Player ID");
+  }
+
+  // =========================================
+  // PLAYER ID
+  // =========================================
+
+  if (state.step === "player") {
+    state.playerId = text;
+
+    if (state.issueType === "Deposit") {
+      state.step = "agent";
+      states.set(userId, state);
+
+      return ctx.reply("🤵 Enter Agent Number");
+    }
+
+    state.step = "trx";
+    states.set(userId, state);
+
+    return ctx.reply("🔢 Enter TRX ID");
+  }
+
+  // =========================================
+  // AGENT NUMBER
+  // =========================================
+
+  if (state.step === "agent") {
+    state.agentNumber = text;
+    state.step = "trx";
+
+    states.set(userId, state);
+
+    return ctx.reply("🔢 Enter TRX ID");
+  }
+
+  // =========================================
+  // TRX
+  // =========================================
+
+  if (state.step === "trx") {
+    state.trxId = text;
+    state.step = "date";
+
+    states.set(userId, state);
+
+    return ctx.reply("📅 Enter Date");
+  }
+
+  // =========================================
+  // DATE
+  // =========================================
+
+  if (state.step === "date") {
+    state.date = text;
+    state.step = "time";
+
+    states.set(userId, state);
+
+    return ctx.reply("⏰ Enter Time");
+  }
+
+  // =========================================
+  // TIME
+  // =========================================
+
+  if (state.step === "time") {
+    state.time = text;
+    state.step = "photo";
+
+    states.set(userId, state);
+
+    return ctx.reply(
+      "📸 Send Screenshot or type skip"
+    );
+  }
+
+  // =========================================
+  // SKIP PHOTO
+  // =========================================
+
+  if (
+    state.step === "photo" &&
+    text.toLowerCase() === "skip"
+  ) {
+    await submitTicket(ctx, null);
+  }
+});
+
+// ============================================
+// PHOTO
+// ============================================
+
+bot.on("photo", async (ctx) => {
+  const state = states.get(ctx.from.id);
+
+  if (!state) return;
+
+  if (state.step !== "photo") return;
+
+  const photo = ctx.message.photo.pop();
+
+  await submitTicket(ctx, photo.file_id);
+});
+
+// ============================================
+// SUBMIT TICKET
+// ============================================
+
+async function submitTicket(ctx, photoId) {
+  const userId = ctx.from.id.toString();
+
+  const state = states.get(ctx.from.id);
+
+  const user = await User.findOne({
+    userId,
+  });
+
+  const ticketNumber =
+    "TICKET" + Date.now();
+
+  const ticket = await Ticket.create({
+    ticketNumber,
+    userId,
+    userName: user?.name || "Unknown",
+    issueType: state.issueType,
+    paymentMethod: state.paymentMethod,
+    playerId: state.playerId,
+    agentNumber: state.agentNumber || "",
+    trxId: state.trxId,
+    date: state.date,
+    time: state.time,
+    photoId: photoId || "",
+  });
+
+  clearState(ctx.from.id);
+
+  // =========================================
+  // USER SUCCESS
+  // =========================================
+
+  await ctx.reply(
+    `✅ Ticket Created\n\n🎫 Ticket ID: ${ticket.ticketNumber}`
+  );
+
+  // =========================================
+  // ADMIN NOTIFICATION
+  // =========================================
+
+  const adminMessage =
+    `🎫 NEW TICKET\n\n` +
+    `🎟 Ticket: ${escapeText(ticket.ticketNumber)}\n` +
+    `👤 User: ${escapeText(ticket.userName)}\n` +
+    `📋 Issue: ${escapeText(ticket.issueType)}\n` +
+    `💳 Payment: ${escapeText(ticket.paymentMethod)}\n` +
+    `🆔 Player ID: ${escapeText(ticket.playerId)}\n` +
+    `🤵 Agent: ${escapeText(ticket.agentNumber)}\n` +
+    `🔢 TRX: ${escapeText(ticket.trxId)}\n` +
+    `📅 Date: ${escapeText(ticket.date)}\n` +
+    `⏰ Time: ${escapeText(ticket.time)}\n`;
+
+  for (const adminId of ADMIN_CHAT_IDS) {
+    try {
+      if (photoId) {
+        await bot.telegram.sendPhoto(
+          adminId,
+          photoId,
+          {
+            caption: adminMessage,
+            parse_mode: "MarkdownV2",
+          }
+        );
+      } else {
+        await bot.telegram.sendMessage(
+          adminId,
+          adminMessage,
+          {
+            parse_mode: "MarkdownV2",
+          }
+        );
+      }
+    } catch (err) {
+      console.log(
+        "Admin notification failed:",
+        err.message
+      );
+    }
+  }
+
+  showMainMenu(ctx);
+}
+
+// ============================================
+// BROADCAST
+// ============================================
+
+bot.action("broadcast", async (ctx) => {
+  await ctx.answerCbQuery();
+
+  states.set(ctx.from.id, {
+    step: "broadcast",
+  });
+
+  ctx.reply("📢 Send broadcast message");
+});
+
+// ============================================
+// PENDING
+// ============================================
+
+bot.action("pending", async (ctx) => {
+  await ctx.answerCbQuery();
+
+  const tickets = await Ticket.find({
+    status: "pending",
+  }).sort({
+    createdAt: -1,
+  });
+
+  if (!tickets.length) {
+    return ctx.reply("✅ No Pending Tickets");
+  }
+
+  let msg = "📋 Pending Tickets\n\n";
+
+  tickets.forEach((t) => {
+    msg += `🎫 ${t.ticketNumber} | ${t.issueType}\n`;
+  });
+
+  ctx.reply(msg);
+});
+
+// ============================================
+// MY ID
+// ============================================
+
+bot.command("myid", (ctx) => {
+  ctx.reply(`🆔 Your ID: ${ctx.from.id}`);
+});
+
+// ============================================
+// ERROR
+// ============================================
+
+bot.catch((err) => {
+  console.log("BOT ERROR:", err);
+});
+
+// ============================================
+// START BOT
+// ============================================
+
+bot.launch();
+
+console.log("✅ BOT STARTED");
+
+// ============================================
+// STOP
+// ============================================
+
+process.once("SIGINT", () => bot.stop("SIGINT"));
+process.once("SIGTERM", () => bot.stop("SIGTERM"));
