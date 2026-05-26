@@ -45,14 +45,17 @@ const ticketSchema = new mongoose.Schema({
   userName: String,
   username: String,
   phone: String,
+
   issueType: String,
   paymentMethod: String,
+  amount: String,
   playerId: String,
   agentNumber: String,
   trxId: { type: String, unique: true, index: true },
   date: String,
   time: String,
   photoId: String,
+
   status: { type: String, default: "processing" },
   checkedBy: String,
   lastAdminReply: String,
@@ -86,12 +89,20 @@ const Ticket = mongoose.model("Ticket", ticketSchema);
 
 const states = new Map();
 
+function stateKey(ctx) {
+  return String(ctx.from.id);
+}
+
 function clearState(id) {
-  states.delete(id);
+  states.delete(String(id));
 }
 
 function isAdmin(id) {
   return ADMIN_CHAT_IDS.includes(String(id));
+}
+
+function isPrivateChat(ctx) {
+  return ctx.chat && ctx.chat.type === "private";
 }
 
 function statusText(status) {
@@ -127,13 +138,14 @@ function adminButtons(ticketNumber) {
       Markup.button.callback("📋 Payment", `copy_payment_${ticketNumber}`),
     ],
     [
+      Markup.button.callback("📋 Amount", `copy_amount_${ticketNumber}`),
       Markup.button.callback("📋 Player ID", `copy_player_${ticketNumber}`),
-      Markup.button.callback("📋 Agent", `copy_agent_${ticketNumber}`),
     ],
     [
+      Markup.button.callback("📋 Agent", `copy_agent_${ticketNumber}`),
       Markup.button.callback("📋 TRX", `copy_trx_${ticketNumber}`),
-      Markup.button.callback("📋 Date/Time", `copy_datetime_${ticketNumber}`),
     ],
+    [Markup.button.callback("📋 Date/Time", `copy_datetime_${ticketNumber}`)],
     [Markup.button.callback("👁 Take Task", `take_${ticketNumber}`)],
     [Markup.button.callback("💬 Reply User", `admin_reply_${ticketNumber}`)],
     [Markup.button.callback("📜 Ticket History", `history_${ticketNumber}`)],
@@ -149,6 +161,7 @@ function copyInfo(t) {
     `Ticket ID: ${t.ticketNumber}\n` +
     `Issue: ${t.issueType}\n` +
     `Payment: ${t.paymentMethod}\n` +
+    `Amount: ${t.amount || "N/A"}\n` +
     `Player ID: ${t.playerId}\n` +
     `Agent Number: ${t.agentNumber || "N/A"}\n` +
     `TRX ID: ${t.trxId}\n` +
@@ -167,6 +180,7 @@ function ticketDetails(t) {
     `🆔 Telegram ID: ${t.userId}\n\n` +
     `📋 Issue: ${t.issueType}\n` +
     `💳 Payment: ${t.paymentMethod}\n` +
+    `💰 Amount: ${t.amount || "N/A"}\n` +
     `🆔 Player ID: ${t.playerId}\n` +
     `🤵 Agent Number: ${t.agentNumber || "N/A"}\n` +
     `🔢 TRX ID: ${t.trxId}\n` +
@@ -226,6 +240,11 @@ bot.command("groupid", (ctx) => {
   ctx.reply(`🆔 Group ID:\n${ctx.chat.id}`);
 });
 
+bot.command("cancel", async (ctx) => {
+  clearState(ctx.from.id);
+  return ctx.reply("✅ Current action cancelled.");
+});
+
 bot.on("contact", async (ctx) => {
   const contact = ctx.message.contact;
 
@@ -254,6 +273,10 @@ bot.on("contact", async (ctx) => {
 bot.action("create_ticket", async (ctx) => {
   await ctx.answerCbQuery();
 
+  if (!isPrivateChat(ctx)) {
+    return ctx.reply("❌ Please create ticket in private chat with bot.");
+  }
+
   return ctx.reply(
     "📋 Select Issue Type",
     Markup.inlineKeyboard([
@@ -266,7 +289,11 @@ bot.action("create_ticket", async (ctx) => {
 bot.action("issue_deposit", async (ctx) => {
   await ctx.answerCbQuery();
 
-  states.set(ctx.from.id, {
+  if (!isPrivateChat(ctx)) {
+    return ctx.reply("❌ Please continue in private chat with bot.");
+  }
+
+  states.set(stateKey(ctx), {
     step: "payment",
     issueType: "Deposit",
   });
@@ -277,7 +304,11 @@ bot.action("issue_deposit", async (ctx) => {
 bot.action("issue_withdrawal", async (ctx) => {
   await ctx.answerCbQuery();
 
-  states.set(ctx.from.id, {
+  if (!isPrivateChat(ctx)) {
+    return ctx.reply("❌ Please continue in private chat with bot.");
+  }
+
+  states.set(stateKey(ctx), {
     step: "payment",
     issueType: "Withdrawal",
   });
@@ -286,18 +317,19 @@ bot.action("issue_withdrawal", async (ctx) => {
 });
 
 async function showPreview(ctx, photoId = "") {
-  const state = states.get(ctx.from.id);
+  const state = states.get(stateKey(ctx));
 
   if (!state) return ctx.reply("❌ Session Expired");
 
   state.photoId = photoId;
   state.step = "preview";
-  states.set(ctx.from.id, state);
+  states.set(stateKey(ctx), state);
 
   const msg =
     `📋 TICKET PREVIEW\n\n` +
     `📋 Issue: ${state.issueType}\n` +
     `💳 Payment: ${state.paymentMethod}\n` +
+    `💰 Amount: ${state.amount || "N/A"}\n` +
     `🆔 Player ID: ${state.playerId}\n` +
     `🤵 Agent Number: ${state.agentNumber || "N/A"}\n` +
     `🔢 TRX ID: ${state.trxId}\n` +
@@ -331,7 +363,11 @@ bot.action("cancel_ticket", async (ctx) => {
 bot.action("submit_ticket", async (ctx) => {
   await ctx.answerCbQuery();
 
-  const state = states.get(ctx.from.id);
+  if (!isPrivateChat(ctx)) {
+    return ctx.reply("❌ Please submit ticket in private chat with bot.");
+  }
+
+  const state = states.get(stateKey(ctx));
   if (!state) return ctx.reply("❌ Session Expired");
 
   const trxId = state.trxId.trim();
@@ -360,6 +396,7 @@ bot.action("submit_ticket", async (ctx) => {
       phone: user?.phone || "",
       issueType: state.issueType,
       paymentMethod: state.paymentMethod,
+      amount: state.amount || "",
       playerId: state.playerId,
       agentNumber: state.agentNumber || "",
       trxId,
@@ -408,7 +445,7 @@ bot.action("submit_ticket", async (ctx) => {
   }
 });
 
-bot.action(/copy_(issue|payment|player|agent|trx|datetime)_(.+)/, async (ctx) => {
+bot.action(/copy_(issue|payment|amount|player|agent|trx|datetime)_(.+)/, async (ctx) => {
   await ctx.answerCbQuery("Copy text sent ✅");
 
   if (!isAdmin(ctx.from.id)) return ctx.reply("❌ Admin Only");
@@ -423,6 +460,7 @@ bot.action(/copy_(issue|payment|player|agent|trx|datetime)_(.+)/, async (ctx) =>
 
   if (field === "issue") text = `Issue: ${ticket.issueType}`;
   if (field === "payment") text = `Payment: ${ticket.paymentMethod}`;
+  if (field === "amount") text = `Amount: ${ticket.amount || "N/A"}`;
   if (field === "player") text = `Player ID: ${ticket.playerId}`;
   if (field === "agent") text = `Agent Number: ${ticket.agentNumber || "N/A"}`;
   if (field === "trx") text = `TRX ID: ${ticket.trxId}`;
@@ -452,6 +490,10 @@ bot.action(/copy_(.+)/, async (ctx) => {
 bot.action(/user_reply_(.+)/, async (ctx) => {
   await ctx.answerCbQuery();
 
+  if (!isPrivateChat(ctx)) {
+    return ctx.reply("❌ Please reply from private chat with bot.");
+  }
+
   const ticketNumber = ctx.match[1];
 
   const ticket = await Ticket.findOne({
@@ -462,13 +504,13 @@ bot.action(/user_reply_(.+)/, async (ctx) => {
   if (!ticket) return ctx.reply("❌ Ticket Not Found");
   if (ticket.status === "resolved") return ctx.reply("🏁 Ticket Already Resolved");
 
-  states.set(ctx.from.id, {
+  states.set(stateKey(ctx), {
     step: "user_reply",
     ticketNumber,
   });
 
   return ctx.reply(
-    `💬 Send Reply\n\n🎫 Ticket ID: ${ticketNumber}\n\nYou can send:\n✅ Text\n✅ Photo\n✅ Video\n✅ Document`
+    `💬 Send Reply\n\n🎫 Ticket ID: ${ticketNumber}\n\nYou can send:\n✅ Text\n✅ Photo\n✅ Video\n✅ Document\n\n/cancel to cancel`
   );
 });
 
@@ -482,13 +524,35 @@ bot.action(/admin_reply_(.+)/, async (ctx) => {
   const ticket = await Ticket.findOne({ ticketNumber });
   if (!ticket) return ctx.reply("❌ Ticket Not Found");
 
-  states.set(ctx.from.id, {
+  if (ticket.status === "resolved") {
+    clearState(ctx.from.id);
+    return ctx.reply(`🏁 Ticket Already Resolved\n\n🎫 Ticket ID: ${ticketNumber}`);
+  }
+
+  states.set(stateKey(ctx), {
     step: "admin_reply",
     ticketNumber,
   });
 
+  if (!isPrivateChat(ctx)) {
+    try {
+      await bot.telegram.sendMessage(
+        ctx.from.id,
+        `💬 Reply To User\n\n🎫 Ticket ID: ${ticketNumber}\n\nSend your reply here in private chat.\n\n✅ Text\n✅ Photo\n✅ Video\n✅ Document\n\n/cancel to cancel`
+      );
+    } catch (err) {
+      return ctx.reply(
+        "❌ Please start the bot in private first, then click Reply User again."
+      );
+    }
+
+    return ctx.reply(
+      `✅ Reply mode opened in your private bot chat.\n\n🎫 Ticket ID: ${ticketNumber}\n\n⚠️ Group messages will NOT be sent to user.`
+    );
+  }
+
   return ctx.reply(
-    `💬 Reply To User\n\n🎫 Ticket ID: ${ticketNumber}\n\nSend:\n✅ Text\n✅ Photo\n✅ Video\n✅ Document`
+    `💬 Reply To User\n\n🎫 Ticket ID: ${ticketNumber}\n\nSend:\n✅ Text\n✅ Photo\n✅ Video\n✅ Document\n\n/cancel to cancel`
   );
 });
 
@@ -502,6 +566,10 @@ bot.action(/take_(.+)/, async (ctx) => {
   });
 
   if (!ticket) return ctx.reply("❌ Ticket Not Found");
+
+  if (ticket.status === "resolved") {
+    return ctx.reply(`🏁 Ticket Already Resolved\n\n🎫 Ticket ID: ${ticket.ticketNumber}`);
+  }
 
   const name = adminName(ctx);
 
@@ -531,13 +599,17 @@ bot.action(/take_(.+)/, async (ctx) => {
     `👁 TASK TAKEN\n\n🎫 Ticket ID: ${ticket.ticketNumber}\n👤 Current Admin: ${name}\n\n📜 TAKE HISTORY:\n${historyText}`
   );
 
-  await bot.telegram.sendMessage(
-    ticket.userId,
-    `👨‍💻 Support Started Working\n\n🎫 Ticket ID: ${ticket.ticketNumber}\n👤 Checked By: ${name}\n📌 ${statusText(
-      ticket.status
-    )}`,
-    userButtons(ticket.ticketNumber)
-  );
+  try {
+    await bot.telegram.sendMessage(
+      ticket.userId,
+      `👨‍💻 Support Started Working\n\n🎫 Ticket ID: ${ticket.ticketNumber}\n👤 Checked By: ${name}\n📌 ${statusText(
+        ticket.status
+      )}`,
+      userButtons(ticket.ticketNumber)
+    );
+  } catch (err) {
+    console.log("❌ User notify failed:", err.message);
+  }
 });
 
 bot.action(/success_(.+)/, async (ctx) => {
@@ -551,19 +623,27 @@ bot.action(/success_(.+)/, async (ctx) => {
 
   if (!ticket) return ctx.reply("❌ Ticket Not Found");
 
+  if (ticket.status === "resolved") {
+    return ctx.reply(`🏁 Ticket Already Resolved\n\n🎫 Ticket ID: ${ticket.ticketNumber}`);
+  }
+
   ticket.status = "successful";
   ticket.updatedAt = new Date();
   await ticket.save();
 
   await ctx.reply(`✅ Ticket Successful\n\n🎫 Ticket ID: ${ticket.ticketNumber}`);
 
-  await bot.telegram.sendMessage(
-    ticket.userId,
-    `✅ Your Request Successful\n\n🎫 Ticket ID: ${ticket.ticketNumber}\n📌 ${statusText(
-      ticket.status
-    )}`,
-    userButtons(ticket.ticketNumber)
-  );
+  try {
+    await bot.telegram.sendMessage(
+      ticket.userId,
+      `✅ Your Request Successful\n\n🎫 Ticket ID: ${ticket.ticketNumber}\n📌 ${statusText(
+        ticket.status
+      )}`,
+      userButtons(ticket.ticketNumber)
+    );
+  } catch (err) {
+    console.log("❌ User notify failed:", err.message);
+  }
 });
 
 bot.action(/resolve_(.+)/, async (ctx) => {
@@ -581,14 +661,20 @@ bot.action(/resolve_(.+)/, async (ctx) => {
   ticket.updatedAt = new Date();
   await ticket.save();
 
+  clearState(ctx.from.id);
+
   await ctx.reply(`🏁 Ticket Resolved\n\n🎫 Ticket ID: ${ticket.ticketNumber}`);
 
-  await bot.telegram.sendMessage(
-    ticket.userId,
-    `🏁 Your Ticket Resolved\n\n🎫 Ticket ID: ${ticket.ticketNumber}\n📌 ${statusText(
-      ticket.status
-    )}`
-  );
+  try {
+    await bot.telegram.sendMessage(
+      ticket.userId,
+      `🏁 Your Ticket Resolved\n\n🎫 Ticket ID: ${ticket.ticketNumber}\n📌 ${statusText(
+        ticket.status
+      )}`
+    );
+  } catch (err) {
+    console.log("❌ User notify failed:", err.message);
+  }
 });
 
 bot.action(/history_(.+)/, async (ctx) => {
@@ -637,6 +723,10 @@ bot.action(/history_(.+)/, async (ctx) => {
 bot.action("mytickets", async (ctx) => {
   await ctx.answerCbQuery();
 
+  if (!isPrivateChat(ctx)) {
+    return ctx.reply("❌ Please check tickets in private chat with bot.");
+  }
+
   const tickets = await Ticket.find({
     userId: String(ctx.from.id),
   }).sort({ createdAt: -1 });
@@ -645,7 +735,7 @@ bot.action("mytickets", async (ctx) => {
 
   for (const t of tickets) {
     await ctx.reply(
-      `🎫 Ticket ID: ${t.ticketNumber}\n📌 ${statusText(t.status)}\n👁 ${
+      `🎫 Ticket ID: ${t.ticketNumber}\n💰 Amount: ${t.amount || "N/A"}\n📌 ${statusText(t.status)}\n👁 ${
         t.checkedBy || "Not Checked"
       }`,
       t.status === "resolved" ? undefined : userButtons(t.ticketNumber)
@@ -688,19 +778,30 @@ bot.action("broadcast", async (ctx) => {
 
   if (!isAdmin(ctx.from.id)) return ctx.reply("❌ Admin Only");
 
-  states.set(ctx.from.id, {
+  if (!isPrivateChat(ctx)) {
+    return ctx.reply("❌ Please use broadcast from private admin bot chat.");
+  }
+
+  states.set(stateKey(ctx), {
     step: "broadcast",
   });
 
   return ctx.reply(
-    "📢 Send Broadcast Now\n\nYou can send:\n✅ Text\n✅ Photo\n✅ Video\n✅ Document"
+    "📢 Send Broadcast Now\n\nYou can send:\n✅ Text\n✅ Photo\n✅ Video\n✅ Document\n\n/cancel to cancel"
   );
 });
 
 async function handleStateMessage(ctx, type, fileId, text) {
-  const state = states.get(ctx.from.id);
+  const state = states.get(stateKey(ctx));
 
   if (!state) return false;
+
+  if (
+    ["broadcast", "admin_reply", "user_reply"].includes(state.step) &&
+    !isPrivateChat(ctx)
+  ) {
+    return false;
+  }
 
   if (state.step === "broadcast") {
     if (!isAdmin(ctx.from.id)) {
@@ -756,6 +857,12 @@ async function handleStateMessage(ctx, type, fileId, text) {
   }
 
   if (state.step === "admin_reply") {
+    if (!isAdmin(ctx.from.id)) {
+      clearState(ctx.from.id);
+      await ctx.reply("❌ Admin Only");
+      return true;
+    }
+
     const ticket = await Ticket.findOne({
       ticketNumber: state.ticketNumber,
     });
@@ -763,6 +870,12 @@ async function handleStateMessage(ctx, type, fileId, text) {
     if (!ticket) {
       clearState(ctx.from.id);
       await ctx.reply("❌ Ticket Not Found");
+      return true;
+    }
+
+    if (ticket.status === "resolved") {
+      clearState(ctx.from.id);
+      await ctx.reply(`🏁 Ticket Already Resolved\n\n🎫 Ticket ID: ${ticket.ticketNumber}`);
       return true;
     }
 
@@ -905,9 +1018,9 @@ bot.on("photo", async (ctx) => {
   const handled = await handleStateMessage(ctx, "photo", photo.file_id, caption);
   if (handled) return;
 
-  const state = states.get(ctx.from.id);
+  const state = states.get(stateKey(ctx));
 
-  if (state && state.step === "photo") {
+  if (state && state.step === "photo" && isPrivateChat(ctx)) {
     return showPreview(ctx, photo.file_id);
   }
 });
@@ -927,17 +1040,26 @@ bot.on("text", async (ctx) => {
 
   if (text.startsWith("/")) return;
 
-  const state = states.get(ctx.from.id);
-
   const handled = await handleStateMessage(ctx, "text", null, text);
   if (handled) return;
 
+  const state = states.get(stateKey(ctx));
+
   if (!state) return;
+
+  if (!isPrivateChat(ctx)) return;
 
   if (state.step === "payment") {
     state.paymentMethod = text;
+    state.step = "amount";
+    states.set(stateKey(ctx), state);
+    return ctx.reply("💰 Enter Amount\n\nExample: 1000");
+  }
+
+  if (state.step === "amount") {
+    state.amount = text;
     state.step = "player";
-    states.set(ctx.from.id, state);
+    states.set(stateKey(ctx), state);
     return ctx.reply("🆔 Enter Player ID");
   }
 
@@ -946,40 +1068,40 @@ bot.on("text", async (ctx) => {
 
     if (state.issueType === "Deposit") {
       state.step = "agent";
-      states.set(ctx.from.id, state);
+      states.set(stateKey(ctx), state);
       return ctx.reply("🤵 Enter Agent Number");
     }
 
     state.step = "trx";
-    states.set(ctx.from.id, state);
+    states.set(stateKey(ctx), state);
     return ctx.reply("🔢 Enter TRX ID");
   }
 
   if (state.step === "agent") {
     state.agentNumber = text;
     state.step = "trx";
-    states.set(ctx.from.id, state);
+    states.set(stateKey(ctx), state);
     return ctx.reply("🔢 Enter TRX ID");
   }
 
   if (state.step === "trx") {
     state.trxId = text;
     state.step = "date";
-    states.set(ctx.from.id, state);
+    states.set(stateKey(ctx), state);
     return ctx.reply("📅 Enter Date");
   }
 
   if (state.step === "date") {
     state.date = text;
     state.step = "time";
-    states.set(ctx.from.id, state);
+    states.set(stateKey(ctx), state);
     return ctx.reply("⏰ Enter Time");
   }
 
   if (state.step === "time") {
     state.time = text;
     state.step = "photo";
-    states.set(ctx.from.id, state);
+    states.set(stateKey(ctx), state);
     return ctx.reply("📸 Send Screenshot Or Type skip");
   }
 
