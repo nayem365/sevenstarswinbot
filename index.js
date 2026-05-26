@@ -507,6 +507,7 @@ bot.action(/user_reply_(.+)/, async (ctx) => {
   states.set(stateKey(ctx), {
     step: "user_reply",
     ticketNumber,
+    chatId: String(ctx.chat.id),
   });
 
   return ctx.reply(
@@ -532,27 +533,11 @@ bot.action(/admin_reply_(.+)/, async (ctx) => {
   states.set(stateKey(ctx), {
     step: "admin_reply",
     ticketNumber,
+    chatId: String(ctx.chat.id),
   });
 
-  if (!isPrivateChat(ctx)) {
-    try {
-      await bot.telegram.sendMessage(
-        ctx.from.id,
-        `💬 Reply To User\n\n🎫 Ticket ID: ${ticketNumber}\n\nSend your reply here in private chat.\n\n✅ Text\n✅ Photo\n✅ Video\n✅ Document\n\n/cancel to cancel`
-      );
-    } catch (err) {
-      return ctx.reply(
-        "❌ Please start the bot in private first, then click Reply User again."
-      );
-    }
-
-    return ctx.reply(
-      `✅ Reply mode opened in your private bot chat.\n\n🎫 Ticket ID: ${ticketNumber}\n\n⚠️ Group messages will NOT be sent to user.`
-    );
-  }
-
   return ctx.reply(
-    `💬 Reply To User\n\n🎫 Ticket ID: ${ticketNumber}\n\nSend:\n✅ Text\n✅ Photo\n✅ Video\n✅ Document\n\n/cancel to cancel`
+    `💬 Reply To User\n\n🎫 Ticket ID: ${ticketNumber}\n\nNow send your reply in this same chat.\n\n✅ Text\n✅ Photo\n✅ Video\n✅ Document\n\n/cancel to cancel`
   );
 });
 
@@ -784,6 +769,7 @@ bot.action("broadcast", async (ctx) => {
 
   states.set(stateKey(ctx), {
     step: "broadcast",
+    chatId: String(ctx.chat.id),
   });
 
   return ctx.reply(
@@ -796,11 +782,20 @@ async function handleStateMessage(ctx, type, fileId, text) {
 
   if (!state) return false;
 
-  if (
-    ["broadcast", "admin_reply", "user_reply"].includes(state.step) &&
-    !isPrivateChat(ctx)
-  ) {
+  if (state.step === "broadcast" && !isPrivateChat(ctx)) {
     return false;
+  }
+
+  if (state.step === "user_reply" && !isPrivateChat(ctx)) {
+    return false;
+  }
+
+  if (state.step === "admin_reply") {
+    if (!isAdmin(ctx.from.id)) return false;
+
+    if (String(ctx.chat.id) !== String(state.chatId)) {
+      return false;
+    }
   }
 
   if (state.step === "broadcast") {
