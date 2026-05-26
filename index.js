@@ -56,6 +56,27 @@ const ticketSchema = new mongoose.Schema({
   status: { type: String, default: "processing" },
   checkedBy: String,
   lastAdminReply: String,
+
+  takenHistory: [
+    {
+      adminId: String,
+      adminName: String,
+      username: String,
+      takenAt: { type: Date, default: Date.now },
+    },
+  ],
+
+  replyHistory: [
+    {
+      from: String,
+      senderId: String,
+      senderName: String,
+      type: String,
+      message: String,
+      createdAt: { type: Date, default: Date.now },
+    },
+  ],
+
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
 });
@@ -87,6 +108,10 @@ function displayAccount(t) {
   return t.userId;
 }
 
+function adminName(ctx) {
+  return `${ctx.from.first_name || ""} ${ctx.from.last_name || ""}`.trim() || "Admin";
+}
+
 function userButtons(ticketNumber) {
   return Markup.inlineKeyboard([
     [Markup.button.callback("💬 Reply Support", `user_reply_${ticketNumber}`)],
@@ -111,6 +136,7 @@ function adminButtons(ticketNumber) {
     ],
     [Markup.button.callback("👁 Take Task", `take_${ticketNumber}`)],
     [Markup.button.callback("💬 Reply User", `admin_reply_${ticketNumber}`)],
+    [Markup.button.callback("📜 Ticket History", `history_${ticketNumber}`)],
     [
       Markup.button.callback("✅ Successful", `success_${ticketNumber}`),
       Markup.button.callback("🏁 Resolve", `resolve_${ticketNumber}`),
@@ -120,6 +146,7 @@ function adminButtons(ticketNumber) {
 
 function copyInfo(t) {
   return (
+    `Ticket ID: ${t.ticketNumber}\n` +
     `Issue: ${t.issueType}\n` +
     `Payment: ${t.paymentMethod}\n` +
     `Player ID: ${t.playerId}\n` +
@@ -133,7 +160,7 @@ function copyInfo(t) {
 function ticketDetails(t) {
   return (
     `🎫 SUPPORT TICKET\n\n` +
-    `🎟 Ticket: ${t.ticketNumber}\n` +
+    `🎟 Ticket ID: ${t.ticketNumber}\n` +
     `📌 Status: ${statusText(t.status)}\n\n` +
     `👤 User: ${t.userName || "Unknown"}\n` +
     `🔗 Account: ${displayAccount(t)}\n` +
@@ -345,7 +372,7 @@ bot.action("submit_ticket", async (ctx) => {
     clearState(ctx.from.id);
 
     await ctx.reply(
-      `✅ Request Submitted\n\n🎫 Ticket: ${ticket.ticketNumber}\n📌 Status: ${statusText(
+      `✅ Request Submitted\n\n🎫 Ticket ID: ${ticket.ticketNumber}\n📌 Status: ${statusText(
         ticket.status
       )}`,
       userButtons(ticket.ticketNumber)
@@ -441,7 +468,7 @@ bot.action(/user_reply_(.+)/, async (ctx) => {
   });
 
   return ctx.reply(
-    "💬 Send Reply\n\nYou can send:\n✅ Text\n✅ Photo\n✅ Video\n✅ Document"
+    `💬 Send Reply\n\n🎫 Ticket ID: ${ticketNumber}\n\nYou can send:\n✅ Text\n✅ Photo\n✅ Video\n✅ Document`
   );
 });
 
@@ -461,7 +488,7 @@ bot.action(/admin_reply_(.+)/, async (ctx) => {
   });
 
   return ctx.reply(
-    "💬 Reply To User\n\nSend:\n✅ Text\n✅ Photo\n✅ Video\n✅ Document"
+    `💬 Reply To User\n\n🎫 Ticket ID: ${ticketNumber}\n\nSend:\n✅ Text\n✅ Photo\n✅ Video\n✅ Document`
   );
 });
 
@@ -476,16 +503,37 @@ bot.action(/take_(.+)/, async (ctx) => {
 
   if (!ticket) return ctx.reply("❌ Ticket Not Found");
 
+  const name = adminName(ctx);
+
   ticket.status = "task_at_work";
-  ticket.checkedBy = ctx.from.first_name;
+  ticket.checkedBy = name;
   ticket.updatedAt = new Date();
+
+  ticket.takenHistory.push({
+    adminId: String(ctx.from.id),
+    adminName: name,
+    username: ctx.from.username || "",
+  });
+
   await ticket.save();
 
-  await ctx.reply(`👁 Checked By ${ticket.checkedBy}`);
+  const historyText = ticket.takenHistory
+    .map((h, i) => {
+      return (
+        `${i + 1}. ${h.adminName}` +
+        `${h.username ? ` (@${h.username})` : ""}\n` +
+        `🕒 ${new Date(h.takenAt).toLocaleString()}`
+      );
+    })
+    .join("\n\n");
+
+  await ctx.reply(
+    `👁 TASK TAKEN\n\n🎫 Ticket ID: ${ticket.ticketNumber}\n👤 Current Admin: ${name}\n\n📜 TAKE HISTORY:\n${historyText}`
+  );
 
   await bot.telegram.sendMessage(
     ticket.userId,
-    `👨‍💻 Support Started Working\n\n🎫 ${ticket.ticketNumber}\n📌 ${statusText(
+    `👨‍💻 Support Started Working\n\n🎫 Ticket ID: ${ticket.ticketNumber}\n👤 Checked By: ${name}\n📌 ${statusText(
       ticket.status
     )}`,
     userButtons(ticket.ticketNumber)
@@ -507,11 +555,11 @@ bot.action(/success_(.+)/, async (ctx) => {
   ticket.updatedAt = new Date();
   await ticket.save();
 
-  await ctx.reply("✅ Ticket Successful");
+  await ctx.reply(`✅ Ticket Successful\n\n🎫 Ticket ID: ${ticket.ticketNumber}`);
 
   await bot.telegram.sendMessage(
     ticket.userId,
-    `✅ Your Request Successful\n\n🎫 ${ticket.ticketNumber}\n📌 ${statusText(
+    `✅ Your Request Successful\n\n🎫 Ticket ID: ${ticket.ticketNumber}\n📌 ${statusText(
       ticket.status
     )}`,
     userButtons(ticket.ticketNumber)
@@ -533,14 +581,57 @@ bot.action(/resolve_(.+)/, async (ctx) => {
   ticket.updatedAt = new Date();
   await ticket.save();
 
-  await ctx.reply("🏁 Ticket Resolved");
+  await ctx.reply(`🏁 Ticket Resolved\n\n🎫 Ticket ID: ${ticket.ticketNumber}`);
 
   await bot.telegram.sendMessage(
     ticket.userId,
-    `🏁 Your Ticket Resolved\n\n🎫 ${ticket.ticketNumber}\n📌 ${statusText(
+    `🏁 Your Ticket Resolved\n\n🎫 Ticket ID: ${ticket.ticketNumber}\n📌 ${statusText(
       ticket.status
     )}`
   );
+});
+
+bot.action(/history_(.+)/, async (ctx) => {
+  await ctx.answerCbQuery();
+
+  if (!isAdmin(ctx.from.id)) return ctx.reply("❌ Admin Only");
+
+  const ticket = await Ticket.findOne({
+    ticketNumber: ctx.match[1],
+  });
+
+  if (!ticket) return ctx.reply("❌ Ticket Not Found");
+
+  let history = `📜 TICKET HISTORY\n\n🎫 Ticket ID: ${ticket.ticketNumber}\n📌 Status: ${statusText(ticket.status)}\n\n`;
+
+  history += `👁 TAKE HISTORY:\n`;
+
+  if (ticket.takenHistory && ticket.takenHistory.length) {
+    ticket.takenHistory.forEach((h, i) => {
+      history +=
+        `\n${i + 1}. ${h.adminName}` +
+        `${h.username ? ` (@${h.username})` : ""}` +
+        `\n🕒 ${new Date(h.takenAt).toLocaleString()}\n`;
+    });
+  } else {
+    history += `No take history\n`;
+  }
+
+  history += `\n💬 REPLY HISTORY:\n`;
+
+  if (ticket.replyHistory && ticket.replyHistory.length) {
+    ticket.replyHistory.forEach((r, i) => {
+      history +=
+        `\n${i + 1}. ${r.senderName} (${r.from})` +
+        `\n📦 Type: ${r.type}` +
+        `\n📝 Message: ${r.message}` +
+        `\n🕒 ${new Date(r.createdAt).toLocaleString()}\n`;
+    });
+  } else {
+    history += `No replies yet`;
+  }
+
+  return ctx.reply(history);
 });
 
 bot.action("mytickets", async (ctx) => {
@@ -554,7 +645,7 @@ bot.action("mytickets", async (ctx) => {
 
   for (const t of tickets) {
     await ctx.reply(
-      `🎫 ${t.ticketNumber}\n📌 ${statusText(t.status)}\n👁 ${
+      `🎫 Ticket ID: ${t.ticketNumber}\n📌 ${statusText(t.status)}\n👁 ${
         t.checkedBy || "Not Checked"
       }`,
       t.status === "resolved" ? undefined : userButtons(t.ticketNumber)
@@ -676,7 +767,7 @@ async function handleStateMessage(ctx, type, fileId, text) {
     }
 
     const caption =
-      `💬 SUPPORT REPLY\n\n🎫 ${ticket.ticketNumber}\n📌 ${statusText(
+      `💬 SUPPORT REPLY\n\n🎫 Ticket ID: ${ticket.ticketNumber}\n📌 ${statusText(
         ticket.status
       )}\n\n${text || ""}`;
 
@@ -712,10 +803,23 @@ async function handleStateMessage(ctx, type, fileId, text) {
     ticket.status = "task_at_work";
     ticket.lastAdminReply = text || type;
     ticket.updatedAt = new Date();
+
+    ticket.replyHistory.push({
+      from: "admin",
+      senderId: String(ctx.from.id),
+      senderName: adminName(ctx),
+      type,
+      message: text || type,
+    });
+
     await ticket.save();
 
     clearState(ctx.from.id);
-    await ctx.reply("✅ Reply Sent");
+
+    await ctx.reply(
+      `✅ Reply Sent\n\n🎫 Ticket ID: ${ticket.ticketNumber}\n👤 User: ${ticket.userName}\n📌 Status: ${statusText(ticket.status)}`
+    );
+
     return true;
   }
 
@@ -738,7 +842,7 @@ async function handleStateMessage(ctx, type, fileId, text) {
     }
 
     const caption =
-      `💬 USER REPLY\n\n🎫 ${ticket.ticketNumber}\n👤 ${ticket.userName}\n📌 ${statusText(
+      `💬 USER REPLY\n\n🎫 Ticket ID: ${ticket.ticketNumber}\n👤 ${ticket.userName}\n📌 ${statusText(
         ticket.status
       )}\n\n${text || ""}`;
 
@@ -771,8 +875,23 @@ async function handleStateMessage(ctx, type, fileId, text) {
       });
     }
 
+    ticket.replyHistory.push({
+      from: "user",
+      senderId: String(ctx.from.id),
+      senderName: ticket.userName || "User",
+      type,
+      message: text || type,
+    });
+
+    ticket.updatedAt = new Date();
+    await ticket.save();
+
     clearState(ctx.from.id);
-    await ctx.reply("✅ Reply Sent");
+
+    await ctx.reply(
+      `✅ Reply Sent\n\n🎫 Ticket ID: ${ticket.ticketNumber}\n📌 Status: ${statusText(ticket.status)}`
+    );
+
     return true;
   }
 
